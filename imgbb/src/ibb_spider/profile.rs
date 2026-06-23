@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, ensure};
+use llpha::HtmlQuery;
 use reqwest::Url;
-use scraper::{Html, Selector};
 
 use super::utils::normalize_url_input;
 
@@ -106,38 +106,24 @@ impl IbbProfileUrl {
 
 /// 从用户主页 HTML 片段提取专辑列表。
 pub(super) fn parse_profile_albums(html: &str) -> Result<Vec<IbbProfileAlbum>> {
-    let document = Html::parse_fragment(html);
-    let item_selector = parse_selector(r#"div.list-item[data-type="album"]"#)?;
-    let link_selector = parse_selector("div.list-item-image.fixed-size > a")?;
-    let cover_selector = parse_selector("div.list-item-image.fixed-size > a > img")?;
+    let document = HtmlQuery::fragment(html);
     let mut albums = Vec::new();
 
-    for item in document.select(&item_selector) {
-        let Some(name) = item.value().attr("data-name").map(str::trim) else {
-            continue;
-        };
-        if name.is_empty() {
-            continue;
-        }
-
-        let Some(url) = item
-            .select(&link_selector)
-            .next()
-            .and_then(|link| link.value().attr("href"))
-        else {
+    for item in document.select(r#"div.list-item[data-type="album"]"#)? {
+        let Some(name) = item.trimmed_attr("data-name") else {
             continue;
         };
 
-        let cover_url = item
-            .select(&cover_selector)
-            .next()
-            .and_then(|img| img.value().attr("src"))
-            .map(str::to_string);
+        let Some(url) = item.first_attr("div.list-item-image.fixed-size > a", "href")? else {
+            continue;
+        };
+
+        let cover_url = item.first_attr("div.list-item-image.fixed-size > a > img", "src")?;
 
         albums.push(IbbProfileAlbum {
-            name: name.to_string(),
-            url: url.to_string(),
-            cover_url: cover_url,
+            name,
+            url,
+            cover_url,
         });
     }
 
@@ -146,32 +132,24 @@ pub(super) fn parse_profile_albums(html: &str) -> Result<Vec<IbbProfileAlbum>> {
 
 /// 从用户主页首屏 HTML 提取下一页 seek。
 pub(super) fn extract_next_seek(html: &str) -> Option<String> {
-    let document = Html::parse_fragment(html);
-    let button_selector = parse_selector(r#"button[data-action="load-more"]"#).ok()?;
-    let next_selector = parse_selector(r#"a[data-pagination="next"]"#).ok()?;
+    let document = HtmlQuery::fragment(html);
 
     if let Some(seek) = document
-        .select(&button_selector)
-        .find_map(|button| button.value().attr("data-seek"))
-        .map(str::to_string)
+        .first_attr(r#"button[data-action="load-more"]"#, "data-seek")
+        .ok()?
     {
         return Some(seek);
     }
 
     document
-        .select(&next_selector)
-        .find_map(|link| link.value().attr("href"))
-        .and_then(|href| Url::parse(href).ok())
+        .first_attr(r#"a[data-pagination="next"]"#, "href")
+        .ok()?
+        .and_then(|href| Url::parse(&href).ok())
         .and_then(|url| {
             url.query_pairs()
                 .find(|(key, _)| key == "seek")
                 .map(|(_, value)| value.to_string())
         })
-}
-
-/// 解析 CSS 选择器并转换错误类型。
-fn parse_selector(selector: &str) -> Result<Selector> {
-    Selector::parse(selector).map_err(|err| anyhow!("CSS 选择器解析失败 {selector}: {err}"))
 }
 
 #[cfg(test)]

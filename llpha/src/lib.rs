@@ -9,8 +9,9 @@ pub mod logging;
 pub mod plugin;
 
 pub use analysis::{
-    ExtractResult, HtmlExtractor, Link, required_json_array, required_json_item_string,
-    required_json_string,
+    ExtractResult, HtmlElement, HtmlExtractor, HtmlQuery, Link, html_attr, html_attrs,
+    html_fragment_attr, html_fragment_attrs, html_fragment_text, html_fragment_texts, html_text,
+    html_texts, required_json_array, required_json_item_string, required_json_string,
 };
 pub use config::{
     AppConfig, DEFAULT_CONFIG_PATH, LoggingConfig, LoggingFormat, LoggingTarget, RequestConfig,

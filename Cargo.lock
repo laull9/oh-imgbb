@@ -826,7 +826,6 @@ dependencies = [
  "clap",
  "llpha",
  "reqwest",
- "scraper",
  "serde_json",
  "tokio",
  "tracing",

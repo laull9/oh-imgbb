@@ -4,7 +4,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, ensure};
 use llpha::*;
 use reqwest::Url;
-use scraper::{Html, Selector};
 use serde_json::Value;
 use tokio::fs;
 use tracing::info;
@@ -293,21 +292,16 @@ fn collect_download_results(
 
 /// 从相册主页面提取作者 albums 地址。
 fn extract_album_author_url(html: &str, base_url: &str) -> Result<Option<String>> {
-    let document = Html::parse_document(html);
-    let selector = parse_selector(
+    let Some(href) = html_attr(
+        html,
         "#album > div.content-width > div:nth-child(2) > div.header-content-left > div > div > a",
-    )?;
-    let Some(href) = document
-        .select(&selector)
-        .next()
-        .and_then(|link| link.value().attr("href"))
-        .map(str::trim)
-        .filter(|href| !href.is_empty())
+        "href",
+    )?
     else {
         return Ok(None);
     };
 
-    normalize_author_albums_url(base_url, href).map(Some)
+    normalize_author_albums_url(base_url, &href).map(Some)
 }
 
 /// 规整作者地址并补齐 albums 后缀。
@@ -329,11 +323,6 @@ fn normalize_author_albums_url(base_url: &str, href: &str) -> Result<String> {
     url.set_fragment(None);
 
     Ok(url.to_string())
-}
-
-/// 解析 CSS 选择器并转换错误类型。
-fn parse_selector(selector: &str) -> Result<Selector> {
-    Selector::parse(selector).map_err(|err| anyhow!("CSS 选择器解析失败 {selector}: {err}"))
 }
 
 #[cfg(test)]
