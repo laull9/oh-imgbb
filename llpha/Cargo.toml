@@ -1,0 +1,18 @@
+[package]
+name = "llpha"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+async-trait = "0.1.89"
+reqwest = { version = "0.13.4", features = ["gzip", "brotli", "zstd", "deflate"] }
+rand = "0.9.4"
+scraper = "0.27.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["full"] }
+toml = "1.1.2"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }

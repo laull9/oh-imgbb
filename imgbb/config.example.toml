@@ -1,0 +1,13 @@
+[logging]
+level = "info,llpha=debug"
+target = "console"
+format = "console"
+file_path = "logs/llpha.log"
+color = true
+
+[request]
+max_concurrent_requests = 16
+max_retries = 3
+retry_base_delay_ms = 300
+retry_max_delay_ms = 5000
+retry_jitter = true
