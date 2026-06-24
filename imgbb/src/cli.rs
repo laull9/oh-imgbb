@@ -113,10 +113,7 @@ mod tests {
 
         match cli.command {
             ImgbbCommand::Album(args) => {
-                assert_eq!(
-                    args.format,
-                    Some("{album}_{count}_{name}".to_string())
-                );
+                assert_eq!(args.format, Some("{album}_{count}_{name}".to_string()));
             }
             ImgbbCommand::Profile(_) => panic!("解析到了错误的子命令"),
         }

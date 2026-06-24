@@ -1,9 +1,8 @@
 mod cli;
-mod ibb_spider;
 
 use anyhow::Result;
 use cli::{Cli, IbbAlbumArgs, IbbProfileArgs, ImgbbCommand};
-use ibb_spider::IbbSpiderManager;
+use imgbb::ibb_spider::IbbSpiderManager;
 use llpha::*;
 
 /// main 初始化框架并分发 ImgBB CLI 子命令。

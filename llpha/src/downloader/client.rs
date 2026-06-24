@@ -1,12 +1,16 @@
 use anyhow::{Context, Result, anyhow};
 use reqwest::{Client, Method, Proxy, Response};
+use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
-use tokio::fs;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
 
+#[path = "client_file_download.rs"]
+mod client_file_download;
+
 use crate::config::RequestConfig;
+use crate::downloader::progress::{DownloadProgress, download_progress_callback};
 use crate::downloader::proxy::ProxyPool;
 use crate::downloader::request::{
     DownloadResponse, FetchRequest, FetchResponse, HttpMethod, SavedDownload,
@@ -17,6 +21,15 @@ use crate::plugin::{PluginContext, PluginRegistry};
 
 /// DEFAULT_MAX_CONCURRENT_REQUESTS 表示默认最大并发请求数。
 pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 16;
+
+/// DEFAULT_PARALLEL_DOWNLOAD_THRESHOLD 表示启用分片下载的默认文件大小。
+pub const DEFAULT_PARALLEL_DOWNLOAD_THRESHOLD: u64 = 10 * 1024 * 1024;
+
+/// DEFAULT_DOWNLOAD_PART_SIZE 表示默认分片大小。
+pub(super) const DEFAULT_DOWNLOAD_PART_SIZE: u64 = 5 * 1024 * 1024;
+
+/// DEFAULT_MAX_DOWNLOAD_PARTS 表示单文件默认最大分片并发数。
+pub(super) const DEFAULT_MAX_DOWNLOAD_PARTS: usize = 8;
 
 /// GLOBAL_CLIENT 保存按需初始化的默认客户端。
 static GLOBAL_CLIENT: OnceLock<Arc<LlphaClient>> = OnceLock::new();
@@ -214,6 +227,21 @@ impl LlphaClient {
             .await
     }
 
+    /// 下载指定 URL 并通过异步回调报告进度。
+    pub async fn download_file_with_progress<F, Fut>(
+        &self,
+        url: impl Into<String>,
+        path: impl AsRef<Path>,
+        progress: F,
+    ) -> Result<SavedDownload>
+    where
+        F: Fn(DownloadProgress) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.download_request_to_file_with_progress(FetchRequest::get(url), path, progress)
+            .await
+    }
+
     /// 执行一次可配置请求并应用插件、代理和重试策略。
     pub async fn fetch(&self, request: impl Into<FetchRequest>) -> Result<FetchResponse> {
         let request = request.into();
@@ -247,37 +275,33 @@ impl LlphaClient {
         request: impl Into<FetchRequest>,
         path: impl AsRef<Path>,
     ) -> Result<SavedDownload> {
-        let path = path.as_ref();
-        let response = self.download_request(request).await?;
+        let request = self.prepare_request(request.into())?;
 
-        if !response.is_success() {
-            return Err(anyhow!(
-                "文件下载失败: {} {}",
-                response.status,
-                response.url
-            ));
-        }
-
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("创建下载目录失败: {}", parent.display()))?;
-        }
-
-        fs::write(path, &response.bytes)
+        client_file_download::download_prepared_request_to_file(self, &request, path.as_ref(), None)
             .await
-            .with_context(|| format!("写入下载文件失败: {}", path.display()))?;
+    }
 
-        Ok(SavedDownload {
-            url: response.url,
-            status: response.status,
-            headers: response.headers,
-            path: path.to_path_buf(),
-            bytes_written: response.bytes.len(),
-        })
+    /// 执行一次可配置下载并通过异步回调报告进度。
+    pub async fn download_request_to_file_with_progress<F, Fut>(
+        &self,
+        request: impl Into<FetchRequest>,
+        path: impl AsRef<Path>,
+        progress: F,
+    ) -> Result<SavedDownload>
+    where
+        F: Fn(DownloadProgress) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let request = self.prepare_request(request.into())?;
+        let callback = Some(download_progress_callback(progress));
+
+        client_file_download::download_prepared_request_to_file(
+            self,
+            &request,
+            path.as_ref(),
+            callback,
+        )
+        .await
     }
 
     /// 应用伪装策略和请求前插件。
@@ -395,8 +419,17 @@ impl LlphaClient {
 
     /// 发送一次原始 reqwest 请求。
     async fn send_raw_once(&self, request: &FetchRequest) -> Result<Response> {
+        self.send_raw_with_method_once(request, to_reqwest_method(&request.method))
+            .await
+    }
+
+    /// 使用指定 HTTP 方法发送一次原始 reqwest 请求。
+    async fn send_raw_with_method_once(
+        &self,
+        request: &FetchRequest,
+        method: Method,
+    ) -> Result<Response> {
         let client = self.client_for_request().await?;
-        let method = to_reqwest_method(&request.method);
         let mut builder = client
             .request(method, &request.url)
             .headers(request.options.headers.clone());
@@ -444,10 +477,13 @@ fn to_reqwest_method(method: &HttpMethod) -> Method {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::downloader::progress::DownloadProgressEvent;
     use crate::fake::StaticHeaderFakeStrategy;
     use reqwest::header::USER_AGENT;
+    use tokio::fs;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
 
     #[test]
     /// 验证内部 HTTP 方法可以转换为 reqwest 方法。
@@ -537,13 +573,7 @@ mod tests {
         let body = b"saved file";
         let url = serve_once(body, Some("attachment; filename=\"saved.bin\"")).await;
         let client = LlphaClient::new().unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "llpha-download-{}.bin",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = temp_download_path("saved");
 
         let saved = client.download_to_file(url, &path).await.unwrap();
         let bytes = fs::read(&path).await.unwrap();
@@ -554,27 +584,192 @@ mod tests {
         assert_eq!(saved.path, path);
     }
 
-    /// 启动一次性 HTTP 测试服务。
+    /// 验证落盘下载会报告异步进度。
+    #[tokio::test]
+    async fn client_download_to_file_reports_async_progress() {
+        let body = b"progress file";
+        let url = serve_once(body, None).await;
+        let client = LlphaClient::new().unwrap();
+        let path = temp_download_path("progress");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let progress_events = events.clone();
+
+        let saved = client
+            .download_file_with_progress(url, &path, move |progress| {
+                let progress_events = progress_events.clone();
+                async move {
+                    progress_events.lock().await.push(progress);
+                }
+            })
+            .await
+            .unwrap();
+
+        let progresses = events.lock().await.clone();
+        let _ = fs::remove_file(&path).await;
+
+        assert_eq!(saved.bytes_written, body.len());
+        assert!(
+            progresses
+                .iter()
+                .any(|progress| progress.event == DownloadProgressEvent::Started)
+        );
+        assert!(
+            progresses
+                .iter()
+                .any(|progress| progress.event == DownloadProgressEvent::Advanced)
+        );
+        assert!(progresses.iter().any(|progress| {
+            progress.event == DownloadProgressEvent::Finished
+                && progress.downloaded_bytes == body.len() as u64
+        }));
+    }
+
+    /// 验证大文件会使用 Range 分片下载并自动合并。
+    #[tokio::test]
+    async fn client_download_to_file_merges_parallel_parts() {
+        let size = DEFAULT_PARALLEL_DOWNLOAD_THRESHOLD as usize + 1024;
+        let body = Arc::new(
+            (0..size)
+                .map(|index| (index % 251) as u8)
+                .collect::<Vec<_>>(),
+        );
+        let url = serve_range_file(body.clone()).await;
+        let client = LlphaClient::builder()
+            .max_concurrent_requests(4)
+            .build()
+            .unwrap();
+        let path = temp_download_path("parallel");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let progress_events = events.clone();
+
+        let saved = client
+            .download_file_with_progress(url, &path, move |progress| {
+                let progress_events = progress_events.clone();
+                async move {
+                    progress_events.lock().await.push(progress.event);
+                }
+            })
+            .await
+            .unwrap();
+        let bytes = fs::read(&path).await.unwrap();
+        let events = events.lock().await.clone();
+        let _ = fs::remove_file(&path).await;
+
+        assert_eq!(bytes, body.as_slice());
+        assert_eq!(saved.bytes_written, size);
+        assert!(
+            events
+                .iter()
+                .filter(|event| matches!(event, DownloadProgressEvent::PartStarted { .. }))
+                .count()
+                > 1
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, DownloadProgressEvent::PartFinished { .. }))
+        );
+    }
+
+    /// 生成临时下载文件路径。
+    fn temp_download_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "llpha-download-{name}-{}.bin",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    /// 启动 HTTP 测试服务。
     async fn serve_once(body: &'static [u8], content_disposition: Option<&'static str>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
 
         tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buffer = [0_u8; 1024];
-            let _ = socket.read(&mut buffer).await.unwrap();
-            let mut response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\n",
-                body.len()
-            );
-            if let Some(content_disposition) = content_disposition {
-                response.push_str(&format!("Content-Disposition: {content_disposition}\r\n"));
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0_u8; 1024];
+                let read_size = socket.read(&mut buffer).await.unwrap();
+                let request = String::from_utf8_lossy(&buffer[..read_size]);
+                let is_head = request.starts_with("HEAD ");
+                let mut response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nAccept-Ranges: bytes\r\nConnection: close\r\n",
+                    body.len()
+                );
+                if let Some(content_disposition) = content_disposition {
+                    response.push_str(&format!("Content-Disposition: {content_disposition}\r\n"));
+                }
+                response.push_str("\r\n");
+                socket.write_all(response.as_bytes()).await.unwrap();
+                if !is_head {
+                    socket.write_all(body).await.unwrap();
+                }
             }
-            response.push_str("\r\n");
-            socket.write_all(response.as_bytes()).await.unwrap();
-            socket.write_all(body).await.unwrap();
         });
 
         format!("http://{address}")
+    }
+
+    /// 启动支持 Range 的 HTTP 测试服务。
+    async fn serve_range_file(body: Arc<Vec<u8>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let body = body.clone();
+                tokio::spawn(async move {
+                    serve_range_connection(socket, body).await;
+                });
+            }
+        });
+
+        format!("http://{address}")
+    }
+
+    /// 响应一次支持 Range 的 HTTP 请求。
+    async fn serve_range_connection(mut socket: tokio::net::TcpStream, body: Arc<Vec<u8>>) {
+        let mut buffer = [0_u8; 2048];
+        let read_size = socket.read(&mut buffer).await.unwrap();
+        let request = String::from_utf8_lossy(&buffer[..read_size]);
+        let is_head = request.starts_with("HEAD ");
+        let range = request.lines().find_map(parse_range_header);
+
+        if let Some((start, end)) = range {
+            let end = end.min(body.len().saturating_sub(1));
+            let content = &body[start..=end];
+            let response = format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                content.len(),
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.write_all(content).await.unwrap();
+            return;
+        }
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+        if !is_head {
+            socket.write_all(&body).await.unwrap();
+        }
+    }
+
+    /// 解析 HTTP Range 请求头。
+    fn parse_range_header(line: &str) -> Option<(usize, usize)> {
+        let value = line
+            .strip_prefix("Range:")
+            .or_else(|| line.strip_prefix("range:"))?
+            .trim()
+            .strip_prefix("bytes=")?;
+        let (start, end) = value.split_once('-')?;
+
+        Some((start.parse().ok()?, end.parse().ok()?))
     }
 }

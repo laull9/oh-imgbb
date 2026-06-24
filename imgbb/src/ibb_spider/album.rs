@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, ensure};
 use llpha::*;
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs;
 use tracing::info;
@@ -15,14 +16,34 @@ const IBB_API_URL: &str = "https://ibb.co/json";
 const IBB_ORIGIN: &str = "https://ibb.co";
 
 /// IbbSpiderReport 保存 ImgBB 相册任务结果。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IbbSpiderReport {
     pub normalized_url: String,
     pub author_url: Option<String>,
     pub download_summary: AlbumDownloadSummary,
 }
 
+/// IbbAlbumDetail 保存 ImgBB 相册解析结果。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IbbAlbumDetail {
+    pub url: String,
+    pub title: String,
+    pub author_url: Option<String>,
+    pub images: Vec<IbbAlbumImage>,
+}
+
+/// IbbAlbumImage 保存 ImgBB 相册中的单张图片。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IbbAlbumImage {
+    pub id: String,
+    pub filename: String,
+    pub image_url: String,
+    pub thumbnail_url: Option<String>,
+    pub sort_index: usize,
+}
+
 /// AlbumDownloadSummary 保存相册下载完成后的统计信息。
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AlbumDownloadSummary {
     pub directory: PathBuf,
     pub downloaded_files: usize,
@@ -101,8 +122,7 @@ pub(super) async fn download_album(
     let album = IbbAlbumUrl::parse(input_url)?;
     info!(url = %album.normalized_url, "开始执行 ImgBB 相册任务");
 
-    let album_html = fetch_album_html(&client, &album).await?;
-    let author_url = extract_album_author_url(&album_html, &album.normalized_url)?;
+    let parsed_album = fetch_album_detail(&client, &album).await?;
     let album_json = fetch_album_json(&client, &album).await?;
     let download_summary =
         download_album_contents(client, &base_path, &album_json, &file_name_mode).await?;
@@ -115,8 +135,33 @@ pub(super) async fn download_album(
 
     Ok(IbbSpiderReport {
         normalized_url: album.normalized_url,
-        author_url,
+        author_url: parsed_album.author_url,
         download_summary,
+    })
+}
+
+/// 解析相册信息但不执行文件下载。
+pub(super) async fn parse_album(
+    client: Arc<LlphaClient>,
+    input_url: &str,
+) -> Result<IbbAlbumDetail> {
+    let album = IbbAlbumUrl::parse(input_url)?;
+    fetch_album_detail(&client, &album).await
+}
+
+/// 抓取相册页面和 JSON 并组装预览详情。
+async fn fetch_album_detail(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<IbbAlbumDetail> {
+    let album_html = fetch_album_html(client, album).await?;
+    let author_url = extract_album_author_url(&album_html, &album.normalized_url)?;
+    let album_json = fetch_album_json(client, album).await?;
+    let title = required_json_string(&album_json, "/album/name")?.to_string();
+    let images = parse_album_images(&album_json)?;
+
+    Ok(IbbAlbumDetail {
+        url: album.normalized_url.clone(),
+        title,
+        author_url,
+        images,
     })
 }
 
@@ -191,6 +236,33 @@ async fn fetch_album_contents_json(
     );
 
     serde_json::from_str(&response.body).context("解析 ImgBB JSON 响应失败")
+}
+
+/// 从相册 JSON 中解析图片预览列表。
+fn parse_album_images(album_json: &Value) -> Result<Vec<IbbAlbumImage>> {
+    let contents = required_json_array(album_json, "/contents")?;
+    let mut images = Vec::with_capacity(contents.len());
+
+    for (index, item) in contents.iter().enumerate() {
+        let filename = required_json_item_string(item, "contents", index, "filename")?;
+        let image_url = required_json_item_string(item, "contents", index, "url")?;
+        let thumbnail_url = item
+            .get("thumb")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("display_url").and_then(Value::as_str))
+            .or_else(|| item.get("medium").and_then(Value::as_str))
+            .map(str::to_string);
+
+        images.push(IbbAlbumImage {
+            id: image_url.to_string(),
+            filename: filename.to_string(),
+            image_url: image_url.to_string(),
+            thumbnail_url,
+            sort_index: index,
+        });
+    }
+
+    Ok(images)
 }
 
 /// 构造 ImgBB 相册内容接口的表单正文。
@@ -416,6 +488,17 @@ mod tests {
                 .join("demo_album")
                 .join("demo_album_2_a_b.jpg")
         );
+    }
+
+    /// 验证相册 JSON 可以解析为预览图片列表。
+    #[test]
+    fn album_images_parse_from_json() {
+        let images = parse_album_images(&sample_album_json()).unwrap();
+
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].filename, "a:b.jpg");
+        assert_eq!(images[0].image_url, "https://i.ibb.co/a.jpg");
+        assert_eq!(images[0].sort_index, 0);
     }
 
     /// 验证相册主页面可以提取并补齐作者 albums 地址。

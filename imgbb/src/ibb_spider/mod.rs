@@ -3,6 +3,7 @@ mod name_generator;
 mod profile;
 mod utils;
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,8 +15,8 @@ use serde_json::Value;
 use tracing::info;
 use utils::extract_auth_token;
 
-pub use album::IbbSpiderReport;
-pub use profile::IbbProfileReport;
+pub use album::{IbbAlbumDetail, IbbAlbumImage, IbbSpiderReport};
+pub use profile::{IbbProfileAlbum, IbbProfileBatch, IbbProfileReport};
 
 /// IbbSpiderManager 统一管理 ImgBB 相册和用户主页任务。
 pub struct IbbSpiderManager {
@@ -55,17 +56,45 @@ impl IbbSpiderManager {
         .await
     }
 
+    /// 解析相册信息但不执行文件下载。
+    pub async fn parse_album(&self, input_url: impl AsRef<str>) -> Result<IbbAlbumDetail> {
+        album::parse_album(self.client.clone(), input_url.as_ref()).await
+    }
+
     /// 遍历 ImgBB 用户主页并返回全部子专辑。
     pub async fn list_profile_albums(
         &self,
         input_url: impl AsRef<str>,
     ) -> Result<IbbProfileReport> {
+        self.stream_profile_albums(input_url, |_| async { Ok(()) })
+            .await
+    }
+
+    /// 流式遍历 ImgBB 用户主页，每解析一批专辑就调用回调。
+    pub async fn stream_profile_albums<F, Fut>(
+        &self,
+        input_url: impl AsRef<str>,
+        mut on_batch: F,
+    ) -> Result<IbbProfileReport>
+    where
+        F: FnMut(IbbProfileBatch) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
         let profile = IbbProfileUrl::parse(input_url.as_ref())?;
         info!(url = %profile.normalized_url, "开始遍历 ImgBB 用户主页专辑");
 
         let initial_html = self.fetch_profile_html(&profile).await?;
         let auth_token = extract_auth_token(&initial_html)?;
         let mut albums = parse_profile_albums(&initial_html)?;
+        if !albums.is_empty() {
+            on_batch(IbbProfileBatch {
+                page: 1,
+                albums: albums.clone(),
+                finished: false,
+            })
+            .await?;
+        }
+
         let mut seen_urls = albums
             .iter()
             .map(|album| album.url.clone())
@@ -91,8 +120,10 @@ impl IbbSpiderManager {
             }
 
             let mut new_album_count = 0usize;
+            let mut new_albums = Vec::new();
             for album in page_albums {
                 if seen_urls.insert(album.url.clone()) {
+                    new_albums.push(album.clone());
                     albums.push(album);
                     new_album_count = new_album_count.saturating_add(1);
                 }
@@ -102,12 +133,26 @@ impl IbbSpiderManager {
                 break;
             }
 
+            on_batch(IbbProfileBatch {
+                page,
+                albums: new_albums,
+                finished: false,
+            })
+            .await?;
+
             page = page.saturating_add(1);
             seek = response_json
                 .get("seekEnd")
                 .and_then(Value::as_str)
                 .map(str::to_string);
         }
+
+        on_batch(IbbProfileBatch {
+            page: page.saturating_sub(1).max(1),
+            albums: Vec::new(),
+            finished: true,
+        })
+        .await?;
 
         info!(album_count = albums.len(), "ImgBB 用户主页专辑遍历完成");
 

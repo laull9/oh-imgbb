@@ -1,16 +1,26 @@
 use anyhow::{Context, Result, anyhow, ensure};
 use llpha::HtmlQuery;
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 
 use super::utils::normalize_url_input;
 
 /// IbbProfileReport 保存 ImgBB 用户主页专辑遍历结果。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IbbProfileReport {
     pub albums: Vec<IbbProfileAlbum>,
 }
 
+/// IbbProfileBatch 保存流式解析时的一批专辑。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IbbProfileBatch {
+    pub page: usize,
+    pub albums: Vec<IbbProfileAlbum>,
+    pub finished: bool,
+}
+
 /// IbbProfileAlbum 保存用户主页中的单个子专辑。
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IbbProfileAlbum {
     pub name: String,
     pub url: String,

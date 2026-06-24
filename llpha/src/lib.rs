@@ -19,9 +19,11 @@ pub use config::{
 };
 pub use downloader::{
     DEFAULT_BROWSER_USER_AGENT, DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_RETRIES,
-    DownloadResponse, FetchRequest, FetchResponse, HttpMethod, InMemoryProxyPool, LlphaClient,
-    LlphaClientBuilder, ProxyPool, RequestOptions, RetryPolicy, SavedDownload,
-    browser_form_headers, browser_page_headers, image_download_headers, insert_header,
+    DEFAULT_PARALLEL_DOWNLOAD_THRESHOLD, DownloadProgress, DownloadProgressCallback,
+    DownloadProgressEvent, DownloadProgressFuture, DownloadResponse, FetchRequest, FetchResponse,
+    HttpMethod, InMemoryProxyPool, LlphaClient, LlphaClientBuilder, ProxyPool, RequestOptions,
+    RetryPolicy, SavedDownload, browser_form_headers, browser_page_headers,
+    download_progress_callback, image_download_headers, insert_header,
 };
 pub use engine::{
     Action, ActionGenerator, ActionKind, EngineReport, Fetcher, FnFetcher, HtmlParser,

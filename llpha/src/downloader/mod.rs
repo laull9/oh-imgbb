@@ -2,14 +2,22 @@
 
 pub mod client;
 pub mod headers;
+pub mod progress;
 pub mod proxy;
 pub mod request;
 pub mod retry;
 
-pub use client::{DEFAULT_MAX_CONCURRENT_REQUESTS, LlphaClient, LlphaClientBuilder};
+pub use client::{
+    DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_PARALLEL_DOWNLOAD_THRESHOLD, LlphaClient,
+    LlphaClientBuilder,
+};
 pub use headers::{
     DEFAULT_BROWSER_USER_AGENT, browser_form_headers, browser_page_headers, image_download_headers,
     insert_header,
+};
+pub use progress::{
+    DownloadProgress, DownloadProgressCallback, DownloadProgressEvent, DownloadProgressFuture,
+    download_progress_callback,
 };
 pub use proxy::{InMemoryProxyPool, ProxyPool};
 pub use request::{
