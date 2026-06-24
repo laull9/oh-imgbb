@@ -1,4 +1,5 @@
 mod album;
+mod name_generator;
 mod profile;
 mod utils;
 
@@ -7,6 +8,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use llpha::*;
+use name_generator::AlbumFileNameMode;
 use profile::{IbbProfileUrl, extract_next_seek, parse_profile_albums};
 use serde_json::Value;
 use tracing::info;
@@ -36,11 +38,18 @@ impl IbbSpiderManager {
         self
     }
 
+    /// 设置相册文件计数命名模板。
+    pub fn with_file_name_pattern(mut self, pattern: impl Into<String>) -> Self {
+        self.options.file_name_mode = AlbumFileNameMode::CountPattern(pattern.into());
+        self
+    }
+
     /// 执行相册 JSON 抓取和内容下载。
     pub async fn download_album(&self, input_url: impl AsRef<str>) -> Result<IbbSpiderReport> {
         album::download_album(
             self.client.clone(),
             self.options.base_path.clone(),
+            self.options.file_name_mode.clone(),
             input_url.as_ref(),
         )
         .await
@@ -163,6 +172,7 @@ impl IbbSpiderManager {
 /// IbbSpiderOptions 保存 ImgBB 相册任务配置。
 struct IbbSpiderOptions {
     base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
 }
 
 impl Default for IbbSpiderOptions {
@@ -170,6 +180,7 @@ impl Default for IbbSpiderOptions {
     fn default() -> Self {
         Self {
             base_path: PathBuf::from("."),
+            file_name_mode: AlbumFileNameMode::default(),
         }
     }
 }

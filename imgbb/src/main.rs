@@ -24,10 +24,17 @@ async fn main() -> Result<()> {
 
 /// 执行 ImgBB 相册抓取和下载任务。
 async fn run_ibb_album(args: IbbAlbumArgs) -> Result<()> {
-    let report = IbbSpiderManager::new()
-        .with_base_path(args.base_path)
-        .download_album(args.url)
-        .await?;
+    let IbbAlbumArgs {
+        url,
+        base_path,
+        format,
+    } = args;
+    let mut manager = IbbSpiderManager::new().with_base_path(base_path);
+    if let Some(pattern) = format {
+        manager = manager.with_file_name_pattern(pattern);
+    }
+
+    let report = manager.download_album(url).await?;
 
     println!(
         "下载完成: {} 个文件，{} 字节，目录 {}",

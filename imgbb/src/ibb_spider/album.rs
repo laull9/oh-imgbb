@@ -8,6 +8,7 @@ use serde_json::Value;
 use tokio::fs;
 use tracing::info;
 
+use super::name_generator::{AlbumFileNameGenerator, AlbumFileNameMode};
 use super::utils::{extract_auth_token, normalize_url_input, sanitize_path_segment};
 
 const IBB_API_URL: &str = "https://ibb.co/json";
@@ -94,6 +95,7 @@ impl IbbAlbumUrl {
 pub(super) async fn download_album(
     client: Arc<LlphaClient>,
     base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
     input_url: &str,
 ) -> Result<IbbSpiderReport> {
     let album = IbbAlbumUrl::parse(input_url)?;
@@ -102,7 +104,8 @@ pub(super) async fn download_album(
     let album_html = fetch_album_html(&client, &album).await?;
     let author_url = extract_album_author_url(&album_html, &album.normalized_url)?;
     let album_json = fetch_album_json(&client, &album).await?;
-    let download_summary = download_album_contents(client, &base_path, &album_json).await?;
+    let download_summary =
+        download_album_contents(client, &base_path, &album_json, &file_name_mode).await?;
 
     info!(
         downloaded_files = download_summary.downloaded_files,
@@ -212,8 +215,9 @@ async fn download_album_contents(
     client: Arc<LlphaClient>,
     base_path: &PathBuf,
     album_json: &Value,
+    file_name_mode: &AlbumFileNameMode,
 ) -> Result<AlbumDownloadSummary> {
-    let plan = build_download_plan(base_path, album_json)?;
+    let plan = build_download_plan(base_path, album_json, file_name_mode)?;
     fs::create_dir_all(&plan.directory)
         .await
         .with_context(|| format!("创建相册目录失败: {}", plan.directory.display()))?;
@@ -240,24 +244,31 @@ async fn download_album_contents(
 }
 
 /// 从相册 JSON 构造下载计划。
-fn build_download_plan(base_path: &PathBuf, album_json: &Value) -> Result<AlbumDownloadPlan> {
+fn build_download_plan(
+    base_path: &PathBuf,
+    album_json: &Value,
+    file_name_mode: &AlbumFileNameMode,
+) -> Result<AlbumDownloadPlan> {
     let album_name = required_json_string(album_json, "/album/name")?;
     let directory_name = sanitize_path_segment(album_name);
     ensure!(!directory_name.is_empty(), "相册名称为空");
 
     let contents = required_json_array(album_json, "/contents")?;
     let directory = base_path.join(directory_name);
+    let mut generator =
+        AlbumFileNameGenerator::new(directory.clone(), album_name, file_name_mode.clone())?;
     let mut files = Vec::with_capacity(contents.len());
 
     for (index, item) in contents.iter().enumerate() {
         let filename = required_json_item_string(item, "contents", index, "filename")?;
         let url = required_json_item_string(item, "contents", index, "url")?;
-        let safe_filename = sanitize_path_segment(filename);
-        ensure!(!safe_filename.is_empty(), "contents[{index}].filename 为空");
+        let path = generator
+            .next_path(filename)
+            .with_context(|| format!("生成 contents[{index}].filename 目标路径失败"))?;
 
         files.push(AlbumDownloadFile {
             url: url.to_string(),
-            path: directory.join(safe_filename),
+            path,
         });
     }
 
@@ -343,19 +354,33 @@ mod tests {
     /// 验证下载计划默认使用当前目录作为基础目录。
     #[test]
     fn download_plan_uses_current_dir_by_default() {
-        let plan = build_download_plan(&PathBuf::from("."), &sample_album_json()).unwrap();
+        let plan = build_download_plan(
+            &PathBuf::from("."),
+            &sample_album_json(),
+            &AlbumFileNameMode::default(),
+        )
+        .unwrap();
 
         assert_eq!(plan.directory, PathBuf::from(".").join("demo_album"));
         assert_eq!(
             plan.files[0].path,
             PathBuf::from(".").join("demo_album").join("a_b.jpg")
         );
+        assert_eq!(
+            plan.files[1].path,
+            PathBuf::from(".").join("demo_album").join("a_b_1.jpg")
+        );
     }
 
     /// 验证下载计划支持自定义基础目录。
     #[test]
     fn download_plan_accepts_base_path() {
-        let plan = build_download_plan(&PathBuf::from("downloads"), &sample_album_json()).unwrap();
+        let plan = build_download_plan(
+            &PathBuf::from("downloads"),
+            &sample_album_json(),
+            &AlbumFileNameMode::default(),
+        )
+        .unwrap();
 
         assert_eq!(
             plan.directory,
@@ -366,6 +391,30 @@ mod tests {
             PathBuf::from("downloads")
                 .join("demo_album")
                 .join("a_b.jpg")
+        );
+    }
+
+    /// 验证下载计划支持计数命名模板。
+    #[test]
+    fn download_plan_accepts_count_pattern() {
+        let plan = build_download_plan(
+            &PathBuf::from("downloads"),
+            &sample_album_json(),
+            &AlbumFileNameMode::CountPattern("{album}_{count}_{name}".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.files[0].path,
+            PathBuf::from("downloads")
+                .join("demo_album")
+                .join("demo_album_1_a_b.jpg")
+        );
+        assert_eq!(
+            plan.files[1].path,
+            PathBuf::from("downloads")
+                .join("demo_album")
+                .join("demo_album_2_a_b.jpg")
         );
     }
 
@@ -409,6 +458,10 @@ mod tests {
                 {
                     "filename": "a:b.jpg",
                     "url": "https://i.ibb.co/a.jpg"
+                },
+                {
+                    "filename": "a:b.jpg",
+                    "url": "https://i.ibb.co/a-copy.jpg"
                 }
             ]
         })

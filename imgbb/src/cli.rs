@@ -46,6 +46,10 @@ pub struct IbbAlbumArgs {
     /// base_path 指定下载基础目录，默认当前目录。
     #[arg(short = 'o', long, default_value = ".")]
     pub base_path: PathBuf,
+
+    /// format 指定计数命名模板，支持 {count}、{album}、{name}。
+    #[arg(long)]
+    pub format: Option<String>,
 }
 
 /// IbbProfileArgs 保存 ImgBB 用户主页任务参数。
@@ -77,6 +81,7 @@ mod tests {
             ImgbbCommand::Album(args) => {
                 assert_eq!(args.url, "https://ibb.co/album/ABC123");
                 assert_eq!(args.base_path, PathBuf::from("downloads"));
+                assert_eq!(args.format, None);
             }
             ImgbbCommand::Profile(_) => panic!("解析到了错误的子命令"),
         }
@@ -90,6 +95,28 @@ mod tests {
         match cli.command {
             ImgbbCommand::Album(args) => {
                 assert_eq!(args.base_path, PathBuf::from("."));
+            }
+            ImgbbCommand::Profile(_) => panic!("解析到了错误的子命令"),
+        }
+    }
+
+    /// 验证 ImgBB 相册子命令可以解析计数命名模板。
+    #[test]
+    fn album_accepts_format() {
+        let cli = Cli::parse_from([
+            "imgbb",
+            "album",
+            "--format",
+            "{album}_{count}_{name}",
+            "https://ibb.co/album/ABC123",
+        ]);
+
+        match cli.command {
+            ImgbbCommand::Album(args) => {
+                assert_eq!(
+                    args.format,
+                    Some("{album}_{count}_{name}".to_string())
+                );
             }
             ImgbbCommand::Profile(_) => panic!("解析到了错误的子命令"),
         }
