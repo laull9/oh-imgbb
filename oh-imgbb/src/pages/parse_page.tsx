@@ -19,7 +19,14 @@ import {
 } from "antd";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
-import { downloadAlbum, parseAlbum, parseProfile, saveFavorite } from "../api/tauri_client";
+import {
+  downloadAlbum,
+  downloadAlbumImages,
+  downloadProfileAlbums,
+  parseAlbum,
+  parseProfile,
+  saveFavorite,
+} from "../api/tauri_client";
 import type { AlbumDetail, ProfileAlbum, ProfileBatch } from "../api/types";
 import { ThumbnailGrid } from "../components/thumbnail_grid";
 
@@ -61,8 +68,15 @@ export function ParsePage() {
   }, []);
 
   const allImageSelected = useMemo(
-    () => album !== undefined && selectedImageIds.length === album.images.length,
+    () =>
+      album !== undefined &&
+      album.images.length > 0 &&
+      selectedImageIds.length === album.images.length,
     [album, selectedImageIds.length],
+  );
+  const allProfileSelected = useMemo(
+    () => profileAlbums.length > 0 && selectedAlbumUrls.length === profileAlbums.length,
+    [profileAlbums.length, selectedAlbumUrls.length],
   );
 
   async function handleParse() {
@@ -123,6 +137,40 @@ export function ParsePage() {
     }
   }
 
+  async function handleDownloadSelectedImages() {
+    if (!album || selectedImageIds.length === 0) {
+      message.warning("请选择要下载的图片");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const report = await downloadAlbumImages(album, selectedImageIds);
+      message.success(`下载完成：${report.downloaded_files} 个文件`);
+    } catch (error) {
+      message.error(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDownloadSelectedProfileAlbums() {
+    if (selectedAlbumUrls.length === 0) {
+      message.warning("请选择要下载的相册");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const report = await downloadProfileAlbums(selectedAlbumUrls);
+      message.success(`批量下载完成：${report.downloaded_files} 个文件`);
+    } catch (error) {
+      message.error(String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <Space direction="vertical" size={16} className="page-stack">
       <div className="toolbar">
@@ -175,6 +223,14 @@ export function ParsePage() {
                     收藏
                   </Button>
                   <Button
+                    icon={<DownloadOutlined />}
+                    disabled={selectedImageIds.length === 0}
+                    loading={loading}
+                    onClick={handleDownloadSelectedImages}
+                  >
+                    下载选中
+                  </Button>
+                  <Button
                     type="primary"
                     icon={<DownloadOutlined />}
                     loading={loading}
@@ -197,43 +253,73 @@ export function ParsePage() {
       )}
 
       {kind === "profile" && (
-        <List
-          className="profile-list"
-          dataSource={profileAlbums}
-          locale={{ emptyText: <Empty description="等待解析个人空间" /> }}
-          renderItem={(item) => {
-            const checked = selectedAlbumUrls.includes(item.url);
-
-            return (
-              <List.Item
-                actions={[
-                  <Checkbox
-                    checked={checked}
-                    onChange={(event) => {
-                      setSelectedAlbumUrls((current) =>
-                        event.target.checked
-                          ? [...current, item.url]
-                          : current.filter((url) => url !== item.url),
-                      );
-                    }}
-                  >
-                    选择
-                  </Checkbox>,
-                ]}
+        <Space direction="vertical" size={12} className="page-stack">
+          <div className="result-header">
+            <div>
+              <Typography.Title level={4}>个人空间相册</Typography.Title>
+              <Typography.Text type="secondary">已选择 {selectedAlbumUrls.length} 个</Typography.Text>
+            </div>
+            <Space>
+              <Checkbox
+                checked={allProfileSelected}
+                onChange={(event) =>
+                  setSelectedAlbumUrls(
+                    event.target.checked ? profileAlbums.map((item) => item.url) : [],
+                  )
+                }
               >
-                <List.Item.Meta
-                  avatar={
-                    item.cover_url ? (
-                      <Image width={72} height={72} src={item.cover_url} preview={false} />
-                    ) : undefined
-                  }
-                  title={item.name}
-                  description={item.url}
-                />
-              </List.Item>
-            );
-          }}
-        />
+                全选
+              </Checkbox>
+              <Button
+                type="primary"
+                icon={<DownloadOutlined />}
+                disabled={selectedAlbumUrls.length === 0}
+                loading={loading}
+                onClick={handleDownloadSelectedProfileAlbums}
+              >
+                下载选中
+              </Button>
+            </Space>
+          </div>
+          <List
+            className="profile-list"
+            dataSource={profileAlbums}
+            locale={{ emptyText: <Empty description="等待解析个人空间" /> }}
+            renderItem={(item) => {
+              const checked = selectedAlbumUrls.includes(item.url);
+
+              return (
+                <List.Item
+                  actions={[
+                    <Checkbox
+                      key="select"
+                      checked={checked}
+                      onChange={(event) => {
+                        setSelectedAlbumUrls((current) =>
+                          event.target.checked
+                            ? [...current, item.url]
+                            : current.filter((url) => url !== item.url),
+                        );
+                      }}
+                    >
+                      选择
+                    </Checkbox>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    avatar={
+                      item.cover_url ? (
+                        <Image width={72} height={72} src={item.cover_url} preview={false} />
+                      ) : undefined
+                    }
+                    title={item.name}
+                    description={item.url}
+                  />
+                </List.Item>
+              );
+            }}
+          />
+        </Space>
       )}
     </Space>
   );

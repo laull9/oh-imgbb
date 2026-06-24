@@ -3,6 +3,7 @@ import type {
   AlbumDetail,
   AppSettings,
   CachedResponse,
+  DownloadBatchReport,
   DownloadReport,
   FavoriteInput,
   FavoriteRecord,
@@ -24,6 +25,17 @@ export async function downloadAlbum(url: string) {
   return invoke<DownloadReport>("download_album", { url });
 }
 
+export async function downloadAlbumImages(album: AlbumDetail, imageIds: string[]) {
+  return invoke<DownloadReport>("download_album_images", {
+    album,
+    imageIds,
+  });
+}
+
+export async function downloadProfileAlbums(urls: string[]) {
+  return invoke<DownloadBatchReport>("download_profile_albums", { urls });
+}
+
 export async function listFavorites(kind?: string) {
   return invoke<FavoriteRecord[]>("list_favorites", { kind });
 }
@@ -42,4 +54,8 @@ export async function getSettings() {
 
 export async function updateSettings(settings: AppSettings) {
   return invoke<AppSettings>("update_settings", { settings });
+}
+
+export async function clearThumbnailCache() {
+  return invoke<void>("clear_thumbnail_cache");
 }

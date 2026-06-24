@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -39,6 +40,8 @@ pub struct IbbAlbumImage {
     pub filename: String,
     pub image_url: String,
     pub thumbnail_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_thumbnail_path: Option<String>,
     pub sort_index: usize,
 }
 
@@ -140,6 +143,25 @@ pub(super) async fn download_album(
     })
 }
 
+/// 下载相册中指定图片。
+pub(super) async fn download_album_images(
+    client: Arc<LlphaClient>,
+    base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
+    detail: &IbbAlbumDetail,
+    image_ids: &[String],
+) -> Result<IbbSpiderReport> {
+    let album = IbbAlbumUrl::parse(&detail.url)?;
+    let plan = build_selected_download_plan(&base_path, detail, image_ids, &file_name_mode)?;
+    let download_summary = download_album_plan(client, plan).await?;
+
+    Ok(IbbSpiderReport {
+        normalized_url: album.normalized_url,
+        author_url: detail.author_url.clone(),
+        download_summary,
+    })
+}
+
 /// 解析相册信息但不执行文件下载。
 pub(super) async fn parse_album(
     client: Arc<LlphaClient>,
@@ -147,6 +169,11 @@ pub(super) async fn parse_album(
 ) -> Result<IbbAlbumDetail> {
     let album = IbbAlbumUrl::parse(input_url)?;
     fetch_album_detail(&client, &album).await
+}
+
+/// 规整相册 URL。
+pub(super) fn normalize_album_url(input_url: &str) -> Result<String> {
+    Ok(IbbAlbumUrl::parse(input_url)?.normalized_url)
 }
 
 /// 抓取相册页面和 JSON 并组装预览详情。
@@ -246,23 +273,38 @@ fn parse_album_images(album_json: &Value) -> Result<Vec<IbbAlbumImage>> {
     for (index, item) in contents.iter().enumerate() {
         let filename = required_json_item_string(item, "contents", index, "filename")?;
         let image_url = required_json_item_string(item, "contents", index, "url")?;
-        let thumbnail_url = item
-            .get("thumb")
-            .and_then(Value::as_str)
-            .or_else(|| item.get("display_url").and_then(Value::as_str))
-            .or_else(|| item.get("medium").and_then(Value::as_str))
-            .map(str::to_string);
+        let thumbnail_url = optional_image_variant_url(item, "thumb")
+            .or_else(|| optional_image_variant_url(item, "display_url"))
+            .or_else(|| optional_image_variant_url(item, "medium"));
 
         images.push(IbbAlbumImage {
             id: image_url.to_string(),
             filename: filename.to_string(),
             image_url: image_url.to_string(),
             thumbnail_url,
+            local_thumbnail_path: None,
             sort_index: index,
         });
     }
 
     Ok(images)
+}
+
+/// 从图片变体字段中读取 URL。
+fn optional_image_variant_url(item: &Value, key: &str) -> Option<String> {
+    let value = item.get(key)?;
+    let url = match value {
+        Value::String(url) => Some(url.as_str()),
+        Value::Object(object) => object.get("url").and_then(Value::as_str),
+        _ => None,
+    }?;
+
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    Some(url.to_string())
 }
 
 /// 构造 ImgBB 相册内容接口的表单正文。
@@ -290,6 +332,14 @@ async fn download_album_contents(
     file_name_mode: &AlbumFileNameMode,
 ) -> Result<AlbumDownloadSummary> {
     let plan = build_download_plan(base_path, album_json, file_name_mode)?;
+    download_album_plan(client, plan).await
+}
+
+/// 按下载计划执行所有文件下载。
+async fn download_album_plan(
+    client: Arc<LlphaClient>,
+    plan: AlbumDownloadPlan,
+) -> Result<AlbumDownloadSummary> {
     fs::create_dir_all(&plan.directory)
         .await
         .with_context(|| format!("创建相册目录失败: {}", plan.directory.display()))?;
@@ -313,6 +363,43 @@ async fn download_album_contents(
         .await;
 
     collect_download_results(report, directory)
+}
+
+/// 从已解析相册构造选中图片下载计划。
+fn build_selected_download_plan(
+    base_path: &PathBuf,
+    detail: &IbbAlbumDetail,
+    image_ids: &[String],
+    file_name_mode: &AlbumFileNameMode,
+) -> Result<AlbumDownloadPlan> {
+    ensure!(!image_ids.is_empty(), "请选择要下载的图片");
+
+    let directory_name = sanitize_path_segment(&detail.title);
+    ensure!(!directory_name.is_empty(), "相册名称为空");
+
+    let selected_ids = image_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    let directory = base_path.join(directory_name);
+    let mut generator =
+        AlbumFileNameGenerator::new(directory.clone(), &detail.title, file_name_mode.clone())?;
+    let mut files = Vec::new();
+
+    for image in detail
+        .images
+        .iter()
+        .filter(|image| selected_ids.contains(image.id.as_str()))
+    {
+        let path = generator
+            .next_path(&image.filename)
+            .with_context(|| format!("生成 {} 目标路径失败", image.filename))?;
+        files.push(AlbumDownloadFile {
+            url: image.image_url.clone(),
+            path,
+        });
+    }
+
+    ensure!(!files.is_empty(), "选中的图片不在相册中");
+
+    Ok(AlbumDownloadPlan { directory, files })
 }
 
 /// 从相册 JSON 构造下载计划。
@@ -498,7 +585,37 @@ mod tests {
         assert_eq!(images.len(), 2);
         assert_eq!(images[0].filename, "a:b.jpg");
         assert_eq!(images[0].image_url, "https://i.ibb.co/a.jpg");
+        assert_eq!(
+            images[0].thumbnail_url,
+            Some("https://i.ibb.co/thumb/a.jpg".to_string())
+        );
+        assert_eq!(
+            images[1].thumbnail_url,
+            Some("https://i.ibb.co/medium/a-copy.jpg".to_string())
+        );
         assert_eq!(images[0].sort_index, 0);
+    }
+
+    /// 验证选中图片下载计划只包含被选中的图片。
+    #[test]
+    fn selected_download_plan_keeps_selected_images() {
+        let detail = sample_album_detail();
+        let plan = build_selected_download_plan(
+            &PathBuf::from("downloads"),
+            &detail,
+            &[detail.images[1].id.clone()],
+            &AlbumFileNameMode::CountPattern("{count}_{name}".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(plan.files.len(), 1);
+        assert_eq!(plan.files[0].url, "https://i.ibb.co/a-copy.jpg");
+        assert_eq!(
+            plan.files[0].path,
+            PathBuf::from("downloads")
+                .join("demo_album")
+                .join("1_a_b.jpg")
+        );
     }
 
     /// 验证相册主页面可以提取并补齐作者 albums 地址。
@@ -540,14 +657,30 @@ mod tests {
             "contents": [
                 {
                     "filename": "a:b.jpg",
-                    "url": "https://i.ibb.co/a.jpg"
+                    "url": "https://i.ibb.co/a.jpg",
+                    "thumb": {
+                        "url": "https://i.ibb.co/thumb/a.jpg"
+                    }
                 },
                 {
                     "filename": "a:b.jpg",
-                    "url": "https://i.ibb.co/a-copy.jpg"
+                    "url": "https://i.ibb.co/a-copy.jpg",
+                    "medium": {
+                        "url": "https://i.ibb.co/medium/a-copy.jpg"
+                    }
                 }
             ]
         })
+    }
+
+    /// 构造测试用相册详情。
+    fn sample_album_detail() -> IbbAlbumDetail {
+        IbbAlbumDetail {
+            url: "https://ibb.co/album/ABC123/".to_string(),
+            title: "demo/album".to_string(),
+            author_url: Some("https://beautif11.imgbb.com/albums".to_string()),
+            images: parse_album_images(&sample_album_json()).unwrap(),
+        }
     }
 
     /// 构造测试用相册页面 HTML。

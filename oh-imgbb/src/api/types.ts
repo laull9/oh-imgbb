@@ -16,6 +16,7 @@ export interface AlbumImage {
   filename: string;
   image_url: string;
   thumbnail_url?: string;
+  local_thumbnail_path?: string;
   sort_index: number;
 }
 
@@ -70,6 +71,12 @@ export interface DownloadReport {
   normalized_url: string;
   author_url?: string;
   directory: string;
+  downloaded_files: number;
+  bytes_written: number;
+}
+
+export interface DownloadBatchReport {
+  reports: DownloadReport[];
   downloaded_files: number;
   bytes_written: number;
 }

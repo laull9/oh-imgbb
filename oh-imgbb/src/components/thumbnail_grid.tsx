@@ -1,4 +1,5 @@
 import { Checkbox, Image, Space, Typography } from "antd";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { AlbumImage } from "../api/types";
 
 interface ThumbnailGridProps {
@@ -18,7 +19,9 @@ export function ThumbnailGrid({
     <div className="thumbnail-grid">
       {images.map((image) => {
         const checked = selectedSet.has(image.id);
-        const previewUrl = image.thumbnail_url || image.image_url;
+        const previewUrl = image.local_thumbnail_path
+          ? convertFileSrc(image.local_thumbnail_path)
+          : image.thumbnail_url || image.image_url;
 
         return (
           <div className="thumbnail-tile" key={image.id}>

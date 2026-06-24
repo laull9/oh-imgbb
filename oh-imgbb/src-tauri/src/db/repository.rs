@@ -10,6 +10,18 @@ use crate::settings::AppSettings;
 
 const SETTINGS_KEY: &str = "app_settings";
 
+/// CachedAlbumRecord 保存相册缓存和解析时间。
+pub struct CachedAlbumRecord {
+    pub detail: IbbAlbumDetail,
+    pub parsed_at: String,
+}
+
+/// CachedProfileRecord 保存个人空间缓存和解析时间。
+pub struct CachedProfileRecord {
+    pub report: IbbProfileReport,
+    pub parsed_at: String,
+}
+
 /// 返回当前 UTC 时间字符串。
 fn now_string() -> String {
     Utc::now().to_rfc3339()
@@ -60,14 +72,19 @@ pub async fn save_settings(pool: &SqlitePool, settings: &AppSettings) -> Result<
 pub async fn load_album_cache(
     pool: &SqlitePool,
     album_url: &str,
-) -> Result<Option<IbbAlbumDetail>> {
-    let row = sqlx::query("SELECT raw_json FROM album_cache WHERE album_url = ?")
+) -> Result<Option<CachedAlbumRecord>> {
+    let row = sqlx::query("SELECT raw_json, parsed_at FROM album_cache WHERE album_url = ?")
         .bind(album_url)
         .fetch_optional(pool)
         .await?;
 
-    row.map(|row| serde_json::from_str(row.get::<&str, _>("raw_json")).map_err(Into::into))
-        .transpose()
+    row.map(|row| {
+        Ok(CachedAlbumRecord {
+            detail: serde_json::from_str(row.get::<&str, _>("raw_json"))?,
+            parsed_at: row.get("parsed_at"),
+        })
+    })
+    .transpose()
 }
 
 /// 保存相册缓存和图片索引。
@@ -108,10 +125,11 @@ pub async fn save_album_cache(pool: &SqlitePool, detail: &IbbAlbumDetail) -> Res
         sqlx::query(
             r#"
             INSERT INTO image_cache
-              (album_url, image_url, thumbnail_url, filename, sort_index)
-            VALUES (?, ?, ?, ?, ?)
+              (album_url, image_url, thumbnail_url, local_thumbnail_path, filename, sort_index)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(album_url, image_url) DO UPDATE SET
               thumbnail_url = excluded.thumbnail_url,
+              local_thumbnail_path = excluded.local_thumbnail_path,
               filename = excluded.filename,
               sort_index = excluded.sort_index
             "#,
@@ -119,6 +137,7 @@ pub async fn save_album_cache(pool: &SqlitePool, detail: &IbbAlbumDetail) -> Res
         .bind(&detail.url)
         .bind(&image.image_url)
         .bind(&image.thumbnail_url)
+        .bind(&image.local_thumbnail_path)
         .bind(&image.filename)
         .bind(image.sort_index as i64)
         .execute(pool)
@@ -132,14 +151,19 @@ pub async fn save_album_cache(pool: &SqlitePool, detail: &IbbAlbumDetail) -> Res
 pub async fn load_profile_cache(
     pool: &SqlitePool,
     profile_url: &str,
-) -> Result<Option<IbbProfileReport>> {
-    let row = sqlx::query("SELECT raw_json FROM profile_cache WHERE profile_url = ?")
+) -> Result<Option<CachedProfileRecord>> {
+    let row = sqlx::query("SELECT raw_json, parsed_at FROM profile_cache WHERE profile_url = ?")
         .bind(profile_url)
         .fetch_optional(pool)
         .await?;
 
-    row.map(|row| serde_json::from_str(row.get::<&str, _>("raw_json")).map_err(Into::into))
-        .transpose()
+    row.map(|row| {
+        Ok(CachedProfileRecord {
+            report: serde_json::from_str(row.get::<&str, _>("raw_json"))?,
+            parsed_at: row.get("parsed_at"),
+        })
+    })
+    .transpose()
 }
 
 /// 保存个人空间缓存。

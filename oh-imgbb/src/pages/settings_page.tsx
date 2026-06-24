@@ -1,13 +1,14 @@
-import { SaveOutlined } from "@ant-design/icons";
+import { DeleteOutlined, SaveOutlined } from "@ant-design/icons";
 import { App, Button, Form, Input, InputNumber, Space, Switch, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings } from "../api/tauri_client";
+import { clearThumbnailCache, getSettings, updateSettings } from "../api/tauri_client";
 import type { AppSettings } from "../api/types";
 
 export function SettingsPage() {
   const { message } = App.useApp();
   const [form] = Form.useForm<AppSettings>();
   const [loading, setLoading] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
     getSettings()
@@ -28,8 +29,20 @@ export function SettingsPage() {
     }
   }
 
+  async function handleClearThumbnailCache() {
+    setClearing(true);
+    try {
+      await clearThumbnailCache();
+      message.success("缩略图缓存已清空");
+    } catch (error) {
+      message.error(String(error));
+    } finally {
+      setClearing(false);
+    }
+  }
+
   return (
-    <Space direction="vertical" size={16} className="settings-panel">
+    <div className="settings-panel">
       <Typography.Title level={4}>下载与缓存</Typography.Title>
       <Form form={form} layout="vertical" onFinish={handleFinish}>
         <Form.Item label="下载目录" name="download_dir" rules={[{ required: true }]}>
@@ -53,10 +66,15 @@ export function SettingsPage() {
         <Form.Item label="启动时恢复上次页面" name="restore_last_page" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={loading}>
-          保存
-        </Button>
+        <Space className="settings-actions">
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={loading}>
+            保存
+          </Button>
+          <Button icon={<DeleteOutlined />} loading={clearing} onClick={handleClearThumbnailCache}>
+            清空缩略图缓存
+          </Button>
+        </Space>
       </Form>
-    </Space>
+    </div>
   );
 }

@@ -10,7 +10,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result, ensure};
 use llpha::*;
 use name_generator::AlbumFileNameMode;
-use profile::{IbbProfileUrl, extract_next_seek, parse_profile_albums};
+use profile::{
+    IbbProfileUrl, extract_next_seek, normalize_profile_url as normalize_profile_url_input,
+    parse_profile_albums,
+};
 use serde_json::Value;
 use tracing::info;
 use utils::extract_auth_token;
@@ -56,9 +59,35 @@ impl IbbSpiderManager {
         .await
     }
 
+    /// 下载已解析相册中的指定图片。
+    pub async fn download_album_images(
+        &self,
+        detail: &IbbAlbumDetail,
+        image_ids: &[String],
+    ) -> Result<IbbSpiderReport> {
+        album::download_album_images(
+            self.client.clone(),
+            self.options.base_path.clone(),
+            self.options.file_name_mode.clone(),
+            detail,
+            image_ids,
+        )
+        .await
+    }
+
     /// 解析相册信息但不执行文件下载。
     pub async fn parse_album(&self, input_url: impl AsRef<str>) -> Result<IbbAlbumDetail> {
         album::parse_album(self.client.clone(), input_url.as_ref()).await
+    }
+
+    /// 规整 ImgBB 相册 URL。
+    pub fn normalize_album_url(input_url: impl AsRef<str>) -> Result<String> {
+        album::normalize_album_url(input_url.as_ref())
+    }
+
+    /// 规整 ImgBB 个人空间 URL。
+    pub fn normalize_profile_url(input_url: impl AsRef<str>) -> Result<String> {
+        normalize_profile_url_input(input_url.as_ref())
     }
 
     /// 遍历 ImgBB 用户主页并返回全部子专辑。

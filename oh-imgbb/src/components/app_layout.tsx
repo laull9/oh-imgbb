@@ -40,6 +40,7 @@ export function AppLayout() {
       <Layout className="app-shell">
         <Sider width={216} className="app-sidebar">
           <div className="app-brand">
+            <img src="/oh-ibb.png" alt="" />
             <Typography.Title level={4}>oh-imgbb</Typography.Title>
           </div>
           <Menu
@@ -63,6 +64,7 @@ export function AppLayout() {
     <Layout className="app-shell app-shell-top">
       <Header className="app-top-nav">
         <div className="app-brand">
+          <img src="/oh-ibb.png" alt="" />
           <Typography.Title level={4}>oh-imgbb</Typography.Title>
         </div>
         <Menu

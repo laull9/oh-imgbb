@@ -13,6 +13,7 @@ use crate::settings::AppSettings;
 pub struct AppState {
     pub db_pool: SqlitePool,
     pub default_download_dir: PathBuf,
+    pub thumbnail_cache_dir: PathBuf,
 }
 
 impl AppState {
@@ -25,12 +26,15 @@ impl AppState {
         db::init_schema(&db_pool).await?;
 
         let default_download_dir = resolve_default_download_dir(app, &app_dir)?;
+        let thumbnail_cache_dir = app_dir.join("small-imgs");
+        tokio::fs::create_dir_all(&thumbnail_cache_dir).await?;
         let default_settings = AppSettings::with_download_dir(&default_download_dir);
         db::repository::ensure_settings(&db_pool, &default_settings).await?;
 
         Ok(Self {
             db_pool,
             default_download_dir,
+            thumbnail_cache_dir,
         })
     }
 }

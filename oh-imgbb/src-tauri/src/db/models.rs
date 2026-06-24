@@ -43,3 +43,11 @@ pub struct DownloadReport {
     pub downloaded_files: usize,
     pub bytes_written: usize,
 }
+
+/// DownloadBatchReport 保存批量下载命令的摘要。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DownloadBatchReport {
+    pub reports: Vec<DownloadReport>,
+    pub downloaded_files: usize,
+    pub bytes_written: usize,
+}

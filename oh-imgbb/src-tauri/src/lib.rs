@@ -4,6 +4,7 @@ mod app_state;
 mod commands;
 mod db;
 mod settings;
+mod thumbnail_cache;
 
 use app_state::AppState;
 use tauri::Manager;
@@ -24,11 +25,14 @@ pub fn run() {
             commands::parse::parse_album,
             commands::parse::parse_profile,
             commands::download::download_album,
+            commands::download::download_album_images,
+            commands::download::download_profile_albums,
             commands::favorite::list_favorites,
             commands::favorite::save_favorite,
             commands::favorite::remove_favorite,
             commands::settings::get_settings,
             commands::settings::update_settings,
+            commands::settings::clear_thumbnail_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

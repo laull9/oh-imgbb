@@ -114,6 +114,11 @@ impl IbbProfileUrl {
     }
 }
 
+/// 规整个人空间 URL。
+pub(super) fn normalize_profile_url(input_url: &str) -> Result<String> {
+    Ok(IbbProfileUrl::parse(input_url)?.normalized_url)
+}
+
 /// 从用户主页 HTML 片段提取专辑列表。
 pub(super) fn parse_profile_albums(html: &str) -> Result<Vec<IbbProfileAlbum>> {
     let document = HtmlQuery::fragment(html);
