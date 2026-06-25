@@ -1,7 +1,9 @@
 //! parse 命令负责解析 ImgBB 相册和个人空间。
 
 use anyhow::Result;
-use imgbb::ibb_spider::{IbbAlbumDetail, IbbProfileBatch, IbbProfileReport, IbbSpiderManager};
+use imgbb::ibb_spider::{
+    IbbAlbumDetail, IbbLoginSession, IbbProfileBatch, IbbProfileReport, IbbSpiderManager,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State, Window};
 
@@ -64,6 +66,25 @@ fn emit_album_detail_ready(
     Ok(())
 }
 
+/// 读取匹配当前登录账号的会话。
+async fn matching_profile_session(
+    state: &AppState,
+    normalized_url: &str,
+) -> Option<IbbLoginSession> {
+    let session = state.login_session.lock().await.clone()?;
+    let profile_origin = session.profile.url.trim_end_matches('/');
+    if normalized_url.starts_with(profile_origin) {
+        return Some(session);
+    }
+
+    None
+}
+
+/// 读取当前登录会话。
+async fn current_login_session(state: &AppState) -> Option<IbbLoginSession> {
+    state.login_session.lock().await.clone()
+}
+
 /// 启动后台缩略图缓存任务。
 fn spawn_album_thumbnail_cache(
     window: Window,
@@ -122,7 +143,8 @@ pub async fn parse_album(
         async {
             let normalized_url = IbbSpiderManager::normalize_album_url(&url)?;
             let settings = load_settings_or_default(&state).await?;
-            if !refresh {
+            let session = current_login_session(&state).await;
+            if session.is_none() && !refresh {
                 if let Some(mut record) =
                     repository::load_album_cache(&state.db_pool, &normalized_url).await?
                 {
@@ -143,11 +165,24 @@ pub async fn parse_album(
                 }
             }
 
-            let mut detail = IbbSpiderManager::new().parse_album(&normalized_url).await?;
+            let manager = IbbSpiderManager::new();
+            let mut detail = if let Some(session) = session {
+                manager
+                    .parse_authenticated_album(&session, &normalized_url)
+                    .await?
+            } else {
+                manager.parse_album(&normalized_url).await?
+            };
             mark_album_thumbnails_if_enabled(&state, &mut detail, &settings).await?;
-            let parsed_at = repository::save_album_cache(&state.db_pool, &detail).await?;
+            let parsed_at = if current_login_session(&state).await.is_some() {
+                chrono::Utc::now().to_rfc3339()
+            } else {
+                repository::save_album_cache(&state.db_pool, &detail).await?
+            };
             emit_album_detail_ready(&window, detail.clone(), false, parsed_at.clone())?;
-            spawn_album_thumbnail_cache(window, &state, detail.clone(), settings);
+            if current_login_session(&state).await.is_none() {
+                spawn_album_thumbnail_cache(window, &state, detail.clone(), settings);
+            }
 
             Ok(CachedResponse {
                 data: detail,
@@ -170,7 +205,8 @@ pub async fn parse_profile(
     command_result(
         async {
             let normalized_url = IbbSpiderManager::normalize_profile_url(&url)?;
-            if !refresh {
+            let session = matching_profile_session(&state, &normalized_url).await;
+            if session.is_none() && !refresh {
                 if let Some(record) =
                     repository::load_profile_cache(&state.db_pool, &normalized_url).await?
                 {
@@ -187,19 +223,42 @@ pub async fn parse_profile(
                 }
             }
 
-            let event_window = window.clone();
-            let report: IbbProfileReport = IbbSpiderManager::new()
-                .stream_profile_albums(&normalized_url, move |batch: IbbProfileBatch| {
-                    let event_window = event_window.clone();
+            let manager = IbbSpiderManager::new();
+            let authenticated = session.is_some();
+            let report: IbbProfileReport = if let Some(session) = session {
+                let event_window = window.clone();
+                manager
+                    .stream_authenticated_profile_albums(
+                        &session,
+                        &normalized_url,
+                        move |batch: IbbProfileBatch| {
+                            let event_window = event_window.clone();
 
-                    async move {
-                        event_window.emit("profile://album_found", batch)?;
-                        Ok(())
-                    }
-                })
-                .await?;
-            let parsed_at =
-                repository::save_profile_cache(&state.db_pool, &normalized_url, &report).await?;
+                            async move {
+                                event_window.emit("profile://album_found", batch)?;
+                                Ok(())
+                            }
+                        },
+                    )
+                    .await?
+            } else {
+                let event_window = window.clone();
+                manager
+                    .stream_profile_albums(&normalized_url, move |batch: IbbProfileBatch| {
+                        let event_window = event_window.clone();
+
+                        async move {
+                            event_window.emit("profile://album_found", batch)?;
+                            Ok(())
+                        }
+                    })
+                    .await?
+            };
+            let parsed_at = if authenticated {
+                chrono::Utc::now().to_rfc3339()
+            } else {
+                repository::save_profile_cache(&state.db_pool, &normalized_url, &report).await?
+            };
             let detail = ProfileDetail {
                 url: normalized_url,
                 albums: report.albums,

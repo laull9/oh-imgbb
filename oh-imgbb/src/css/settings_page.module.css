@@ -12,7 +12,16 @@
   margin-top: 0;
 }
 
+.authStatus {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
+  margin-bottom: 16px;
 }

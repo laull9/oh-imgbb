@@ -11,6 +11,10 @@ pub struct AppSettings {
     pub max_concurrent_downloads: usize,
     pub max_retries: usize,
     pub file_name_pattern: Option<String>,
+    #[serde(default)]
+    pub imgbb_login_subject: Option<String>,
+    #[serde(default)]
+    pub imgbb_password: Option<String>,
     pub thumbnail_cache_enabled: bool,
     pub thumbnail_cache_limit_mb: usize,
     pub restore_last_page: bool,
@@ -30,6 +34,8 @@ impl AppSettings {
             max_concurrent_downloads: 8,
             max_retries: 3,
             file_name_pattern: Some("{album}_{count}_{name}".to_string()),
+            imgbb_login_subject: None,
+            imgbb_password: None,
             thumbnail_cache_enabled: true,
             thumbnail_cache_limit_mb: 64,
             restore_last_page: true,

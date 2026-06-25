@@ -7,12 +7,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use llpha::*;
-use reqwest::Url;
+use reqwest::{Url, header::COOKIE};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs;
 use tracing::info;
 
+use super::login::IbbLoginSession;
 use super::name_generator::{AlbumFileNameGenerator, AlbumFileNameMode};
 use super::utils::{extract_auth_token, normalize_url_input, sanitize_path_segment};
 
@@ -166,8 +167,8 @@ pub(super) async fn download_album_with_progress(
     let album = IbbAlbumUrl::parse(input_url)?;
     info!(url = %album.normalized_url, "开始执行 ImgBB 相册任务");
 
-    let parsed_album = fetch_album_detail(&client, &album).await?;
-    let album_json = fetch_album_json(&client, &album).await?;
+    let parsed_album = fetch_album_detail(&client, &album, None).await?;
+    let album_json = fetch_album_json(&client, &album, None).await?;
     let download_summary = download_album_contents(
         client,
         &base_path,
@@ -236,7 +237,17 @@ pub(super) async fn parse_album(
     input_url: &str,
 ) -> Result<IbbAlbumDetail> {
     let album = IbbAlbumUrl::parse(input_url)?;
-    fetch_album_detail(&client, &album).await
+    fetch_album_detail(&client, &album, None).await
+}
+
+/// 以登录态解析相册信息但不执行文件下载。
+pub(super) async fn parse_authenticated_album(
+    client: Arc<LlphaClient>,
+    session: &IbbLoginSession,
+    input_url: &str,
+) -> Result<IbbAlbumDetail> {
+    let album = IbbAlbumUrl::parse(input_url)?;
+    fetch_album_detail(&client, &album, Some(session)).await
 }
 
 /// 规整相册 URL。
@@ -245,10 +256,14 @@ pub(super) fn normalize_album_url(input_url: &str) -> Result<String> {
 }
 
 /// 抓取相册页面和 JSON 并组装预览详情。
-async fn fetch_album_detail(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<IbbAlbumDetail> {
-    let album_html = fetch_album_html(client, album).await?;
+async fn fetch_album_detail(
+    client: &LlphaClient,
+    album: &IbbAlbumUrl,
+    session: Option<&IbbLoginSession>,
+) -> Result<IbbAlbumDetail> {
+    let album_html = fetch_album_html(client, album, session).await?;
     let author_url = extract_album_author_url(&album_html, &album.normalized_url)?;
-    let album_json = fetch_album_json(client, album).await?;
+    let album_json = fetch_album_json(client, album, session).await?;
     let title = required_json_string(&album_json, "/album/name")?.to_string();
     let images = parse_album_images(&album_json)?;
 
@@ -261,9 +276,16 @@ async fn fetch_album_detail(client: &LlphaClient, album: &IbbAlbumUrl) -> Result
 }
 
 /// 抓取相册主页面用于读取相册附加信息。
-async fn fetch_album_html(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<String> {
-    let request = FetchRequest::get(album.normalized_url.clone())
-        .with_headers(browser_page_headers(IBB_ORIGIN)?);
+async fn fetch_album_html(
+    client: &LlphaClient,
+    album: &IbbAlbumUrl,
+    session: Option<&IbbLoginSession>,
+) -> Result<String> {
+    let mut headers = browser_page_headers(IBB_ORIGIN)?;
+    if let Some(session) = session {
+        insert_header(&mut headers, COOKIE, &session.cookie_header)?;
+    }
+    let request = FetchRequest::get(album.normalized_url.clone()).with_headers(headers);
     let response = client.fetch(request).await?;
     ensure!(
         response.is_success(),
@@ -276,10 +298,14 @@ async fn fetch_album_html(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<S
 }
 
 /// 抓取相册 embeds 页面并读取内容 JSON。
-async fn fetch_album_json(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<Value> {
-    let embeds_html = fetch_embeds_html(client, album).await?;
+async fn fetch_album_json(
+    client: &LlphaClient,
+    album: &IbbAlbumUrl,
+    session: Option<&IbbLoginSession>,
+) -> Result<Value> {
+    let embeds_html = fetch_embeds_html(client, album, session).await?;
     let auth_token = extract_auth_token(&embeds_html)?;
-    let response_json = fetch_album_contents_json(client, album, &auth_token).await?;
+    let response_json = fetch_album_contents_json(client, album, session, &auth_token).await?;
     ensure!(
         response_json
             .get("status_code")
@@ -301,8 +327,18 @@ async fn fetch_album_json(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<V
 }
 
 /// 拉取相册 embeds 页面以提取动态 auth_token。
-async fn fetch_embeds_html(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<String> {
-    let response = client.fetch(album.embeds_url()).await?;
+async fn fetch_embeds_html(
+    client: &LlphaClient,
+    album: &IbbAlbumUrl,
+    session: Option<&IbbLoginSession>,
+) -> Result<String> {
+    let mut headers = browser_page_headers(&album.normalized_url)?;
+    if let Some(session) = session {
+        insert_header(&mut headers, COOKIE, &session.cookie_header)?;
+    }
+    let response = client
+        .fetch(FetchRequest::get(album.embeds_url()).with_headers(headers))
+        .await?;
     ensure!(
         response.is_success(),
         "ImgBB embeds 页面请求失败: {} {}",
@@ -317,11 +353,15 @@ async fn fetch_embeds_html(client: &LlphaClient, album: &IbbAlbumUrl) -> Result<
 async fn fetch_album_contents_json(
     client: &LlphaClient,
     album: &IbbAlbumUrl,
+    session: Option<&IbbLoginSession>,
     auth_token: &str,
 ) -> Result<Value> {
     let body = build_album_json_body(album, auth_token)?;
-    let request = FetchRequest::post(IBB_API_URL, body)
-        .with_headers(browser_form_headers(&album.embeds_url(), IBB_ORIGIN)?);
+    let mut headers = browser_form_headers(&album.embeds_url(), IBB_ORIGIN)?;
+    if let Some(session) = session {
+        insert_header(&mut headers, COOKIE, &session.cookie_header)?;
+    }
+    let request = FetchRequest::post(IBB_API_URL, body).with_headers(headers);
     let response = client.fetch(request).await?;
     ensure!(
         response.is_success(),

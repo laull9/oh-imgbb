@@ -5,6 +5,7 @@
 }
 
 .tile {
+  position: relative;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border-color);
@@ -37,6 +38,14 @@
   border: 0;
   color: inherit;
   cursor: zoom-in;
+}
+
+.deleteButton {
+  position: absolute;
+  right: 8px;
+  bottom: 42px;
+  z-index: 2;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
 }
 
 .meta {

@@ -54,12 +54,48 @@ export interface AppSettings {
   max_concurrent_downloads: number;
   max_retries: number;
   file_name_pattern?: string;
+  imgbb_login_subject?: string;
+  imgbb_password?: string;
   thumbnail_cache_enabled: boolean;
   thumbnail_cache_limit_mb: number;
   restore_last_page: boolean;
   pagination_enabled: boolean;
   profile_page_size: number;
   album_page_size: number;
+}
+
+export interface LoginStatus {
+  logged_in: boolean;
+  verified: boolean;
+  login_subject?: string;
+  redirect_url?: string;
+  profile_url?: string;
+  json_url?: string;
+  owner_id?: string;
+}
+
+export type IbbAlbumPrivacy = "public" | "private" | "password";
+
+export interface IbbCreateAlbumInput {
+  name: string;
+  description?: string;
+  privacy: IbbAlbumPrivacy;
+  password?: string;
+}
+
+export interface IbbEditImageInput {
+  image_id: string;
+  title?: string;
+  description?: string;
+  album_id?: string;
+  new_album: boolean;
+}
+
+export interface IbbApiReport {
+  status_code: number;
+  id?: string;
+  url?: string;
+  raw: unknown;
 }
 
 export interface FavoriteRecord {

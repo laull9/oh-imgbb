@@ -1,4 +1,7 @@
 mod album;
+mod login;
+mod manage;
+mod manage_response;
 mod name_generator;
 mod profile;
 mod utils;
@@ -14,6 +17,7 @@ use profile::{
     IbbProfileUrl, extract_next_seek, normalize_profile_url as normalize_profile_url_input,
     parse_profile_albums,
 };
+use reqwest::header::COOKIE;
 use serde_json::Value;
 use tracing::info;
 use utils::extract_auth_token;
@@ -22,6 +26,8 @@ pub use album::{
     IbbAlbumDetail, IbbAlbumImage, IbbDownloadProgress, IbbDownloadProgressCallback,
     IbbDownloadProgressEvent, IbbDownloadProgressFuture, IbbSpiderReport,
 };
+pub use login::{IbbAuthenticatedProfile, IbbCookie, IbbLoginSession};
+pub use manage::{IbbAlbumPrivacy, IbbApiReport, IbbCreateAlbumInput, IbbEditImageInput};
 pub use profile::{IbbProfileAlbum, IbbProfileBatch, IbbProfileReport};
 
 /// IbbSpiderManager 统一管理 ImgBB 相册和用户主页任务。
@@ -125,6 +131,92 @@ impl IbbSpiderManager {
         album::parse_album(self.client.clone(), input_url.as_ref()).await
     }
 
+    /// 以登录态解析相册信息但不执行文件下载。
+    pub async fn parse_authenticated_album(
+        &self,
+        session: &IbbLoginSession,
+        input_url: impl AsRef<str>,
+    ) -> Result<IbbAlbumDetail> {
+        album::parse_authenticated_album(self.client.clone(), session, input_url.as_ref()).await
+    }
+
+    /// 登录 ImgBB 并返回内存会话信息。
+    pub async fn login(
+        &self,
+        login_subject: impl AsRef<str>,
+        password: impl AsRef<str>,
+    ) -> Result<IbbLoginSession> {
+        login::login(
+            self.client.clone(),
+            login_subject.as_ref(),
+            password.as_ref(),
+        )
+        .await
+    }
+
+    /// 创建已登录账号下的新相册。
+    pub async fn create_album(
+        &self,
+        session: &IbbLoginSession,
+        input: IbbCreateAlbumInput,
+    ) -> Result<IbbApiReport> {
+        manage::create_album(session, input).await
+    }
+
+    /// 上传文件到指定相册。
+    pub async fn upload_album_image(
+        &self,
+        session: &IbbLoginSession,
+        album_id: impl AsRef<str>,
+        file_path: impl AsRef<std::path::Path>,
+    ) -> Result<IbbApiReport> {
+        manage::upload_album_image(session, album_id.as_ref(), file_path.as_ref()).await
+    }
+
+    /// 删除指定图片。
+    pub async fn delete_image(
+        &self,
+        session: &IbbLoginSession,
+        image_id: impl AsRef<str>,
+    ) -> Result<IbbApiReport> {
+        manage::delete_image(session, image_id.as_ref()).await
+    }
+
+    /// 删除指定相册。
+    pub async fn delete_album(
+        &self,
+        session: &IbbLoginSession,
+        album_id: impl AsRef<str>,
+    ) -> Result<IbbApiReport> {
+        manage::delete_album(session, album_id.as_ref()).await
+    }
+
+    /// 上传个人主页背景图。
+    pub async fn upload_profile_background(
+        &self,
+        session: &IbbLoginSession,
+        file_path: impl AsRef<std::path::Path>,
+    ) -> Result<IbbApiReport> {
+        manage::upload_profile_background(session, file_path.as_ref()).await
+    }
+
+    /// 删除个人主页背景图。
+    pub async fn delete_profile_background(
+        &self,
+        session: &IbbLoginSession,
+    ) -> Result<IbbApiReport> {
+        manage::delete_profile_background(session).await
+    }
+
+    /// 编辑图片标题、描述或所属相册。
+    pub async fn edit_image(
+        &self,
+        session: &IbbLoginSession,
+        input: IbbEditImageInput,
+    ) -> Result<IbbApiReport> {
+        manage::edit_image(session, input).await
+    }
+
     /// 规整 ImgBB 相册 URL。
     pub fn normalize_album_url(input_url: impl AsRef<str>) -> Result<String> {
         album::normalize_album_url(input_url.as_ref())
@@ -144,10 +236,50 @@ impl IbbSpiderManager {
             .await
     }
 
+    /// 遍历已登录账号视角下的 ImgBB 用户主页专辑。
+    pub async fn list_authenticated_profile_albums(
+        &self,
+        session: &IbbLoginSession,
+        input_url: impl AsRef<str>,
+    ) -> Result<IbbProfileReport> {
+        self.stream_authenticated_profile_albums(session, input_url, |_| async { Ok(()) })
+            .await
+    }
+
     /// 流式遍历 ImgBB 用户主页，每解析一批专辑就调用回调。
     pub async fn stream_profile_albums<F, Fut>(
         &self,
         input_url: impl AsRef<str>,
+        on_batch: F,
+    ) -> Result<IbbProfileReport>
+    where
+        F: FnMut(IbbProfileBatch) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        self.stream_profile_albums_with_session(input_url, None, on_batch)
+            .await
+    }
+
+    /// 流式遍历已登录账号视角下的 ImgBB 用户主页专辑。
+    pub async fn stream_authenticated_profile_albums<F, Fut>(
+        &self,
+        session: &IbbLoginSession,
+        input_url: impl AsRef<str>,
+        on_batch: F,
+    ) -> Result<IbbProfileReport>
+    where
+        F: FnMut(IbbProfileBatch) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        self.stream_profile_albums_with_session(input_url, Some(session), on_batch)
+            .await
+    }
+
+    /// 按可选登录会话流式遍历 ImgBB 用户主页专辑。
+    async fn stream_profile_albums_with_session<F, Fut>(
+        &self,
+        input_url: impl AsRef<str>,
+        session: Option<&IbbLoginSession>,
         mut on_batch: F,
     ) -> Result<IbbProfileReport>
     where
@@ -157,7 +289,7 @@ impl IbbSpiderManager {
         let profile = IbbProfileUrl::parse(input_url.as_ref())?;
         info!(url = %profile.normalized_url, "开始遍历 ImgBB 用户主页专辑");
 
-        let initial_html = self.fetch_profile_html(&profile).await?;
+        let initial_html = self.fetch_profile_html(&profile, session).await?;
         let auth_token = extract_auth_token(&initial_html)?;
         let mut albums = parse_profile_albums(&initial_html)?;
         if !albums.is_empty() {
@@ -181,7 +313,7 @@ impl IbbSpiderManager {
                 break;
             };
             let response_json = self
-                .fetch_profile_albums_json(&profile, &auth_token, page, &current_seek)
+                .fetch_profile_albums_json(&profile, session, &auth_token, page, &current_seek)
                 .await?;
             let page_html = response_json
                 .get("html")
@@ -234,9 +366,16 @@ impl IbbSpiderManager {
     }
 
     /// 拉取 ImgBB 用户主页相册列表首屏。
-    async fn fetch_profile_html(&self, profile: &IbbProfileUrl) -> Result<String> {
-        let request = FetchRequest::get(profile.normalized_url.clone())
-            .with_headers(browser_page_headers(&profile.origin)?);
+    async fn fetch_profile_html(
+        &self,
+        profile: &IbbProfileUrl,
+        session: Option<&IbbLoginSession>,
+    ) -> Result<String> {
+        let mut headers = browser_page_headers(&profile.origin)?;
+        if let Some(session) = session {
+            insert_header(&mut headers, COOKIE, &session.cookie_header)?;
+        }
+        let request = FetchRequest::get(profile.normalized_url.clone()).with_headers(headers);
         let response = self.client.fetch(request).await?;
         ensure!(
             response.is_success(),
@@ -252,18 +391,19 @@ impl IbbSpiderManager {
     async fn fetch_profile_albums_json(
         &self,
         profile: &IbbProfileUrl,
+        session: Option<&IbbLoginSession>,
         auth_token: &str,
         page: usize,
         seek: &str,
     ) -> Result<Value> {
         let body = profile.build_albums_json_body(auth_token, page, seek)?;
+        let mut headers = browser_form_headers(&profile.normalized_url, &profile.origin)?;
+        if let Some(session) = session {
+            insert_header(&mut headers, COOKIE, &session.cookie_header)?;
+        }
         let response = self
             .client
-            .fetch(
-                FetchRequest::post(profile.json_url.clone(), body).with_headers(
-                    browser_form_headers(&profile.normalized_url, &profile.origin)?,
-                ),
-            )
+            .fetch(FetchRequest::post(profile.json_url.clone(), body).with_headers(headers))
             .await?;
         ensure!(
             response.is_success(),

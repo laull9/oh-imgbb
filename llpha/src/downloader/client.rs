@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use reqwest::{Client, Method, Proxy, Response};
+use reqwest::{Client, Method, Proxy, Response, redirect::Policy};
 use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -429,7 +429,7 @@ impl LlphaClient {
         request: &FetchRequest,
         method: Method,
     ) -> Result<Response> {
-        let client = self.client_for_request().await?;
+        let client = self.client_for_request(request).await?;
         let mut builder = client
             .request(method, &request.url)
             .headers(request.options.headers.clone());
@@ -446,19 +446,35 @@ impl LlphaClient {
     }
 
     /// 根据代理池为当前请求创建 reqwest 客户端。
-    async fn client_for_request(&self) -> Result<Client> {
+    async fn client_for_request(&self, request: &FetchRequest) -> Result<Client> {
         let Some(proxy_pool) = &self.proxy_pool else {
-            return Ok(self.client.clone());
+            if request.options.follow_redirects {
+                return Ok(self.client.clone());
+            }
+
+            return Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .map_err(Into::into);
         };
 
         let Some(proxy_url) = proxy_pool.next_proxy()? else {
-            return Ok(self.client.clone());
+            if request.options.follow_redirects {
+                return Ok(self.client.clone());
+            }
+
+            return Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .map_err(Into::into);
         };
 
-        Client::builder()
-            .proxy(Proxy::all(proxy_url)?)
-            .build()
-            .map_err(Into::into)
+        let mut builder = Client::builder().proxy(Proxy::all(proxy_url)?);
+        if !request.options.follow_redirects {
+            builder = builder.redirect(Policy::none());
+        }
+
+        builder.build().map_err(Into::into)
     }
 }
 
@@ -552,6 +568,24 @@ mod tests {
         let response = client.fetch(url).await.unwrap();
 
         assert_eq!(response.body, "hello page");
+    }
+
+    /// 验证禁用跳转时可以读取原始 302 响应。
+    #[tokio::test]
+    async fn client_fetch_can_disable_redirects() {
+        let url = serve_redirect_once("/next").await;
+        let client = LlphaClient::new().unwrap();
+
+        let response = client
+            .fetch(FetchRequest::get(url).without_redirects())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status, reqwest::StatusCode::FOUND);
+        assert_eq!(
+            response.headers.get(reqwest::header::LOCATION).unwrap(),
+            "/next"
+        );
     }
 
     /// 验证客户端下载接口可以读取二进制内容。
@@ -680,6 +714,23 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    /// 启动一次性跳转响应服务。
+    async fn serve_redirect_once(location: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            let response =
+                format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n");
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        format!("http://{address}")
     }
 
     /// 启动 HTTP 测试服务。

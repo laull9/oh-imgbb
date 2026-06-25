@@ -1,4 +1,5 @@
-import { Checkbox, Space, Spin, Typography } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
+import { Button, Checkbox, Space, Spin, Tooltip, Typography } from "antd";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import type { AlbumImage } from "../api/types";
@@ -9,6 +10,8 @@ interface ThumbnailGridProps {
   images: AlbumImage[];
   selectedIds: string[];
   onSelectedIdsChange: (ids: string[]) => void;
+  onDeleteImage?: (image: AlbumImage) => void;
+  deletingImageIds?: string[];
 }
 
 interface ThumbnailImageProps {
@@ -23,8 +26,11 @@ export function ThumbnailGrid({
   images,
   selectedIds,
   onSelectedIdsChange,
+  onDeleteImage,
+  deletingImageIds = [],
 }: ThumbnailGridProps) {
   const selectedSet = new Set(selectedIds);
+  const deletingSet = new Set(deletingImageIds);
   const [detailIndex, setDetailIndex] = useState<number>();
 
   return (
@@ -44,6 +50,19 @@ export function ThumbnailGrid({
                 alt={image.filename}
                 onOpen={() => setDetailIndex(index)}
               />
+              {onDeleteImage && (
+                <Tooltip title="删除图片">
+                  <Button
+                    danger
+                    shape="circle"
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    className={styles.deleteButton}
+                    loading={deletingSet.has(image.id)}
+                    onClick={() => onDeleteImage(image)}
+                  />
+                </Tooltip>
+              )}
               <Space className={styles.meta} align="start">
                 <Checkbox
                   checked={checked}

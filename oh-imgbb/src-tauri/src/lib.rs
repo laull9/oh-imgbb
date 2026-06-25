@@ -14,15 +14,27 @@ use tauri::Manager;
 /// 启动 Tauri 应用并注册后端命令。
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
             let app_state = tauri::async_runtime::block_on(AppState::initialize(&app_handle))?;
             app.manage(app_state);
+            commands::auth::spawn_saved_login(&app.state::<AppState>());
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::auth::login_imgbb,
+            commands::auth::get_imgbb_login_status,
+            commands::auth::logout_imgbb,
+            commands::manage::create_imgbb_album,
+            commands::manage::upload_imgbb_album_image,
+            commands::manage::delete_imgbb_image,
+            commands::manage::delete_imgbb_album,
+            commands::manage::upload_imgbb_profile_background,
+            commands::manage::delete_imgbb_profile_background,
+            commands::manage::edit_imgbb_image,
             commands::parse::parse_album,
             commands::parse::parse_profile,
             commands::parse::list_parse_tabs,

@@ -3,11 +3,13 @@ import {
   HeartOutlined,
   SettingOutlined,
   SearchOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { Grid, Layout, Menu, Typography } from "antd";
 import { useState } from "react";
 import { DownloadsPage } from "../pages/downloads_page";
 import { FavoritesPage } from "../pages/favorites_page";
+import { MinePage } from "../pages/mine_page";
 import { ParsePage } from "../pages/parse_page";
 import type { ParseOpenTarget } from "../pages/parse_page";
 import { SettingsPage } from "../pages/settings_page";
@@ -15,7 +17,7 @@ import styles from "../css/app_layout.module.css";
 
 const { Header, Content, Sider } = Layout;
 
-type PageKey = "parse" | "favorites" | "downloads" | "settings";
+type PageKey = "parse" | "favorites" | "downloads" | "mine" | "settings";
 
 export function AppLayout() {
   const [page, setPage] = useState<PageKey>("parse");
@@ -26,12 +28,14 @@ export function AppLayout() {
     { key: "parse", icon: <SearchOutlined />, label: "解析" },
     { key: "favorites", icon: <HeartOutlined />, label: "收藏" },
     { key: "downloads", icon: <DownloadOutlined />, label: "下载" },
+    { key: "mine", icon: <UserOutlined />, label: "我的" },
     { key: "settings", icon: <SettingOutlined />, label: "设置" },
   ];
   const page_title = {
     parse: "解析与下载",
     favorites: "本地收藏",
     downloads: "下载任务",
+    mine: "我的",
     settings: "应用设置",
   }[page];
   const page_content = (
@@ -54,6 +58,7 @@ export function AppLayout() {
         />
       )}
       {page === "downloads" && <DownloadsPage />}
+      {page === "mine" && <MinePage />}
       {page === "settings" && <SettingsPage />}
     </>
   );

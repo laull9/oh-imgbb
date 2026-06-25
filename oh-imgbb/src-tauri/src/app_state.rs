@@ -4,9 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use imgbb::ibb_spider::IbbLoginSession;
 use llpha::LlphaClient;
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Manager};
+use tokio::sync::Mutex;
 
 use crate::db;
 use crate::download_tasks::DownloadTaskStore;
@@ -22,6 +24,7 @@ pub struct AppState {
     pub detail_image_dir: PathBuf,
     pub thumbnail_client: Arc<LlphaClient>,
     pub download_tasks: Arc<DownloadTaskStore>,
+    pub login_session: Arc<Mutex<Option<IbbLoginSession>>>,
 }
 
 impl AppState {
@@ -44,6 +47,7 @@ impl AppState {
                 .build()?,
         );
         let download_tasks = Arc::new(DownloadTaskStore::new());
+        let login_session = Arc::new(Mutex::new(None));
         let default_settings = AppSettings::with_download_dir(&default_download_dir);
         db::repository::ensure_settings(&db_pool, &default_settings).await?;
 
@@ -54,6 +58,7 @@ impl AppState {
             detail_image_dir,
             thumbnail_client,
             download_tasks,
+            login_session,
         })
     }
 }

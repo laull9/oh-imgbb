@@ -7,10 +7,58 @@ import type {
   DownloadTaskRecord,
   FavoriteInput,
   FavoriteRecord,
+  IbbApiReport,
+  IbbCreateAlbumInput,
+  IbbEditImageInput,
+  LoginStatus,
   ParseTabInput,
   ParseTabRecord,
   ProfileDetail,
 } from "./types";
+
+export async function loginImgbb(loginSubject: string, password: string) {
+  return invoke<LoginStatus>("login_imgbb", { loginSubject, password });
+}
+
+export async function getImgbbLoginStatus() {
+  return invoke<LoginStatus>("get_imgbb_login_status");
+}
+
+export async function logoutImgbb() {
+  return invoke<LoginStatus>("logout_imgbb");
+}
+
+export async function createImgbbAlbum(input: IbbCreateAlbumInput) {
+  return invoke<IbbApiReport>("create_imgbb_album", { input });
+}
+
+export async function uploadImgbbAlbumImage(albumId: string, filePath: string) {
+  return invoke<IbbApiReport>("upload_imgbb_album_image", {
+    input: { album_id: albumId, file_path: filePath },
+  });
+}
+
+export async function deleteImgbbImage(imageId: string) {
+  return invoke<IbbApiReport>("delete_imgbb_image", { imageId });
+}
+
+export async function deleteImgbbAlbum(albumId: string) {
+  return invoke<IbbApiReport>("delete_imgbb_album", { albumId });
+}
+
+export async function uploadImgbbProfileBackground(filePath: string) {
+  return invoke<IbbApiReport>("upload_imgbb_profile_background", {
+    input: { file_path: filePath },
+  });
+}
+
+export async function deleteImgbbProfileBackground() {
+  return invoke<IbbApiReport>("delete_imgbb_profile_background");
+}
+
+export async function editImgbbImage(input: IbbEditImageInput) {
+  return invoke<IbbApiReport>("edit_imgbb_image", { input });
+}
 
 export async function parseAlbum(url: string, refresh: boolean) {
   return invoke<CachedResponse<AlbumDetail>>("parse_album", { url, refresh });

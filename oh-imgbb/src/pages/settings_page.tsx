@@ -1,26 +1,38 @@
 import { DeleteOutlined, SaveOutlined } from "@ant-design/icons";
 import { App, Button, Form, Input, InputNumber, Space, Switch, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { clearThumbnailCache, getSettings, updateSettings } from "../api/tauri_client";
+import {
+  clearThumbnailCache,
+  getSettings,
+  updateSettings,
+} from "../api/tauri_client";
 import type { AppSettings } from "../api/types";
 import styles from "../css/settings_page.module.css";
 
 export function SettingsPage() {
   const { message } = App.useApp();
   const [form] = Form.useForm<AppSettings>();
+  const [savedSettings, setSavedSettings] = useState<AppSettings>();
   const [loading, setLoading] = useState(false);
   const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
     getSettings()
-      .then((settings) => form.setFieldsValue(settings))
+      .then((settings) => {
+        setSavedSettings(settings);
+        form.setFieldsValue(settings);
+      })
       .catch((error) => message.error(String(error)));
   }, [form, message]);
 
   async function handleFinish(values: AppSettings) {
     setLoading(true);
     try {
-      const saved = await updateSettings(values);
+      const saved = await updateSettings({
+        ...savedSettings,
+        ...values,
+      });
+      setSavedSettings(saved);
       form.setFieldsValue(saved);
       message.success("设置已保存");
     } catch (error) {

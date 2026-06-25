@@ -22,6 +22,7 @@ pub enum HttpMethod {
 pub struct RequestOptions {
     pub timeout: Option<Duration>,
     pub headers: HeaderMap,
+    pub follow_redirects: bool,
 }
 
 impl Default for RequestOptions {
@@ -30,6 +31,7 @@ impl Default for RequestOptions {
         Self {
             timeout: None,
             headers: HeaderMap::new(),
+            follow_redirects: true,
         }
     }
 }
@@ -44,6 +46,12 @@ impl RequestOptions {
     /// 设置单次请求头集合。
     pub fn with_headers(mut self, headers: HeaderMap) -> Self {
         self.headers = headers;
+        self
+    }
+
+    /// 禁用单次请求自动跟随跳转。
+    pub fn without_redirects(mut self) -> Self {
+        self.follow_redirects = false;
         self
     }
 }
@@ -93,6 +101,12 @@ impl FetchRequest {
     /// 设置单次请求超时时间。
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.options.timeout = Some(timeout);
+        self
+    }
+
+    /// 禁用本次请求自动跟随跳转。
+    pub fn without_redirects(mut self) -> Self {
+        self.options.follow_redirects = false;
         self
     }
 }
@@ -203,6 +217,7 @@ mod tests {
         let options = RequestOptions::default().with_timeout(Duration::from_secs(3));
 
         assert_eq!(options.timeout, Some(Duration::from_secs(3)));
+        assert!(options.follow_redirects);
     }
 
     #[test]
@@ -213,6 +228,14 @@ mod tests {
         assert_eq!(request.method, HttpMethod::Get);
         assert_eq!(request.url, "https://example.com");
         assert!(request.body.is_none());
+    }
+
+    /// 验证请求可以禁用自动跳转。
+    #[test]
+    fn fetch_request_can_disable_redirects() {
+        let request = FetchRequest::get("https://example.com").without_redirects();
+
+        assert!(!request.options.follow_redirects);
     }
 
     /// 验证 URL 字符串可以直接转换为 GET 请求。
