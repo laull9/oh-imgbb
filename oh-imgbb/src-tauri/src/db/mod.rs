@@ -95,6 +95,18 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
           updated_at TEXT NOT NULL
         )
         "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS parse_tabs (
+          tab_key TEXT PRIMARY KEY,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          sort_index INTEGER NOT NULL,
+          active INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        "#,
     ];
 
     for statement in statements {

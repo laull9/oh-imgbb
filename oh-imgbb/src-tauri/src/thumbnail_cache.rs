@@ -1,12 +1,16 @@
 //! thumbnail_cache 模块负责缩略图本地缓存。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use imgbb::ibb_spider::IbbAlbumDetail;
-use llpha::LlphaClient;
+use imgbb::ibb_spider::{IbbAlbumDetail, IbbAlbumImage};
+use llpha::{LlphaClient, TaskPool};
+use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tracing::warn;
+
+const THUMBNAIL_CACHE_CONCURRENCY: usize = 32;
 
 /// CacheFile 保存待清理缓存文件的元信息。
 struct CacheFile {
@@ -15,37 +19,171 @@ struct CacheFile {
     modified: std::time::SystemTime,
 }
 
-/// 为相册图片补齐本地缩略图路径。
-pub async fn cache_album_thumbnails(
+/// ThumbnailCacheEvent 保存单张缩略图缓存进度。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ThumbnailCacheEvent {
+    pub album_url: String,
+    pub image_id: String,
+    pub thumbnail_url: Option<String>,
+    pub local_thumbnail_path: Option<String>,
+    pub error: Option<String>,
+}
+
+/// ThumbnailCacheTask 保存单张缩略图缓存任务。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ThumbnailCacheTask {
+    album_url: String,
+    image_id: String,
+    thumbnail_url: String,
+    path: PathBuf,
+}
+
+/// ThumbnailCacheResult 保存单张缩略图缓存结果。
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ThumbnailCacheResult {
+    image_id: String,
+    local_thumbnail_path: Option<String>,
+}
+
+/// 标记已经存在且可复用的本地缩略图。
+pub async fn mark_existing_album_thumbnails(
     detail: &mut IbbAlbumDetail,
     cache_dir: &Path,
-    limit_mb: usize,
 ) -> Result<()> {
     fs::create_dir_all(cache_dir)
         .await
         .with_context(|| format!("创建缩略图缓存目录失败: {}", cache_dir.display()))?;
 
-    let client = LlphaClient::global();
     for image in &mut detail.images {
         let Some(thumbnail_url) = image.thumbnail_url.clone() else {
             continue;
         };
 
         let path = cache_dir.join(thumbnail_file_name(&thumbnail_url));
-        if !is_existing_file_usable(&path).await? {
-            match client.download_file(thumbnail_url.clone(), &path).await {
-                Ok(_) => {}
-                Err(err) => {
-                    warn!(url = %thumbnail_url, error = %err, "缩略图缓存下载失败");
-                    continue;
-                }
-            }
+        if is_existing_file_usable(&path).await? {
+            image.local_thumbnail_path = Some(path.to_string_lossy().to_string());
+        } else {
+            image.local_thumbnail_path = None;
         }
-
-        image.local_thumbnail_path = Some(path.to_string_lossy().to_string());
     }
 
-    prune_thumbnail_cache(cache_dir, limit_mb).await
+    Ok(())
+}
+
+/// 为相册图片后台缓存缩略图并按单张推送进度。
+pub async fn cache_album_thumbnails_with_events<F, Fut>(
+    client: Arc<LlphaClient>,
+    mut detail: IbbAlbumDetail,
+    cache_dir: PathBuf,
+    limit_mb: usize,
+    event_handler: F,
+) -> Result<IbbAlbumDetail>
+where
+    F: Fn(ThumbnailCacheEvent) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    fs::create_dir_all(&cache_dir)
+        .await
+        .with_context(|| format!("创建缩略图缓存目录失败: {}", cache_dir.display()))?;
+
+    let tasks = build_thumbnail_tasks(&detail, &cache_dir);
+    let event_handler = Arc::new(event_handler);
+    let report = TaskPool::new(THUMBNAIL_CACHE_CONCURRENCY)
+        .run_all(tasks, move |task| {
+            let client = client.clone();
+            let event_handler = event_handler.clone();
+
+            async move {
+                let event = cache_thumbnail_task(client, task).await;
+                let result = ThumbnailCacheResult {
+                    image_id: event.image_id.clone(),
+                    local_thumbnail_path: event.local_thumbnail_path.clone(),
+                };
+                if let Err(err) = event_handler(event).await {
+                    warn!(error = %err, "缩略图缓存事件推送失败");
+                }
+
+                Ok(result)
+            }
+        })
+        .await;
+
+    for failure in report.failures {
+        warn!(error = %failure, "缩略图缓存事件处理失败");
+    }
+
+    apply_thumbnail_results(&mut detail.images, report.successes);
+    prune_thumbnail_cache(&cache_dir, limit_mb).await?;
+
+    Ok(detail)
+}
+
+/// 构造所有需要缓存的缩略图任务。
+fn build_thumbnail_tasks(detail: &IbbAlbumDetail, cache_dir: &Path) -> Vec<ThumbnailCacheTask> {
+    detail
+        .images
+        .iter()
+        .filter_map(|image| {
+            let thumbnail_url = image.thumbnail_url.clone()?;
+            Some(ThumbnailCacheTask {
+                album_url: detail.url.clone(),
+                image_id: image.id.clone(),
+                path: cache_dir.join(thumbnail_file_name(&thumbnail_url)),
+                thumbnail_url,
+            })
+        })
+        .collect()
+}
+
+/// 缓存单张缩略图并转换为前端事件。
+async fn cache_thumbnail_task(
+    client: Arc<LlphaClient>,
+    task: ThumbnailCacheTask,
+) -> ThumbnailCacheEvent {
+    let local_thumbnail_path = task.path.to_string_lossy().to_string();
+    let result = async {
+        if !is_existing_file_usable(&task.path).await? {
+            client
+                .download_file(task.thumbnail_url.clone(), &task.path)
+                .await?;
+        }
+
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => ThumbnailCacheEvent {
+            album_url: task.album_url,
+            image_id: task.image_id,
+            thumbnail_url: Some(task.thumbnail_url),
+            local_thumbnail_path: Some(local_thumbnail_path),
+            error: None,
+        },
+        Err(err) => {
+            warn!(url = %task.thumbnail_url, error = %err, "缩略图缓存下载失败");
+            ThumbnailCacheEvent {
+                album_url: task.album_url,
+                image_id: task.image_id,
+                thumbnail_url: Some(task.thumbnail_url),
+                local_thumbnail_path: None,
+                error: Some(err.to_string()),
+            }
+        }
+    }
+}
+
+/// 把缩略图缓存结果写回相册详情。
+fn apply_thumbnail_results(images: &mut [IbbAlbumImage], results: Vec<ThumbnailCacheResult>) {
+    for result in results {
+        let Some(local_thumbnail_path) = result.local_thumbnail_path else {
+            continue;
+        };
+
+        if let Some(image) = images.iter_mut().find(|image| image.id == result.image_id) {
+            image.local_thumbnail_path = Some(local_thumbnail_path);
+        }
+    }
 }
 
 /// 判断已有缓存文件是否可复用。

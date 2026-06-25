@@ -1,45 +1,68 @@
 import {
+  DownloadOutlined,
   HeartOutlined,
   SettingOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
 import { Grid, Layout, Menu, Typography } from "antd";
 import { useState } from "react";
+import { DownloadsPage } from "../pages/downloads_page";
 import { FavoritesPage } from "../pages/favorites_page";
 import { ParsePage } from "../pages/parse_page";
+import type { ParseOpenTarget } from "../pages/parse_page";
 import { SettingsPage } from "../pages/settings_page";
+import styles from "../css/app_layout.module.css";
 
 const { Header, Content, Sider } = Layout;
 
-type PageKey = "parse" | "favorites" | "settings";
+type PageKey = "parse" | "favorites" | "downloads" | "settings";
 
 export function AppLayout() {
   const [page, setPage] = useState<PageKey>("parse");
+  const [openTarget, setOpenTarget] = useState<ParseOpenTarget>();
   const screens = Grid.useBreakpoint();
   const use_side_nav = Boolean(screens.md);
   const menu_items = [
     { key: "parse", icon: <SearchOutlined />, label: "解析" },
     { key: "favorites", icon: <HeartOutlined />, label: "收藏" },
+    { key: "downloads", icon: <DownloadOutlined />, label: "下载" },
     { key: "settings", icon: <SettingOutlined />, label: "设置" },
   ];
   const page_title = {
     parse: "解析与下载",
     favorites: "本地收藏",
+    downloads: "下载任务",
     settings: "应用设置",
   }[page];
   const page_content = (
     <>
-      {page === "parse" && <ParsePage />}
-      {page === "favorites" && <FavoritesPage />}
+      {page === "parse" && (
+        <ParsePage
+          openTarget={openTarget}
+          onTargetHandled={(id) =>
+            setOpenTarget((current) => (current?.id === id ? undefined : current))
+          }
+          onOpenDownloads={() => setPage("downloads")}
+        />
+      )}
+      {page === "favorites" && (
+        <FavoritesPage
+          onOpenTarget={(target) => {
+            setOpenTarget({ ...target, id: Date.now() });
+            setPage("parse");
+          }}
+        />
+      )}
+      {page === "downloads" && <DownloadsPage />}
       {page === "settings" && <SettingsPage />}
     </>
   );
 
   if (use_side_nav) {
     return (
-      <Layout className="app-shell">
-        <Sider width={216} className="app-sidebar">
-          <div className="app-brand">
+      <Layout className={styles.shell}>
+        <Sider width={216} className={styles.sidebar}>
+          <div className={styles.brand}>
             <img src="/oh-ibb.png" alt="" />
             <Typography.Title level={4}>oh-imgbb</Typography.Title>
           </div>
@@ -51,19 +74,19 @@ export function AppLayout() {
           />
         </Sider>
         <Layout>
-          <Header className="app-header">
+          <Header className={styles.header}>
             <Typography.Text strong>{page_title}</Typography.Text>
           </Header>
-          <Content className="app-content">{page_content}</Content>
+          <Content className={styles.content}>{page_content}</Content>
         </Layout>
       </Layout>
     );
   }
 
   return (
-    <Layout className="app-shell app-shell-top">
-      <Header className="app-top-nav">
-        <div className="app-brand">
+    <Layout className={`${styles.shell} ${styles.shellTop}`}>
+      <Header className={styles.topNav}>
+        <div className={styles.brand}>
           <img src="/oh-ibb.png" alt="" />
           <Typography.Title level={4}>oh-imgbb</Typography.Title>
         </div>
@@ -74,10 +97,10 @@ export function AppLayout() {
           items={menu_items}
         />
       </Header>
-      <Header className="app-header">
+      <Header className={styles.header}>
         <Typography.Text strong>{page_title}</Typography.Text>
       </Header>
-      <Content className="app-content">{page_content}</Content>
+      <Content className={styles.content}>{page_content}</Content>
     </Layout>
   );
 }

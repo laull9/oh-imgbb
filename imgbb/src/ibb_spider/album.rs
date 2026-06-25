@@ -1,6 +1,9 @@
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use llpha::*;
@@ -74,6 +77,33 @@ pub(super) struct IbbAlbumUrl {
     pub(super) normalized_url: String,
 }
 
+/// IbbDownloadProgressEvent 表示相册下载进度事件类型。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IbbDownloadProgressEvent {
+    TotalKnown,
+    FileFinished,
+}
+
+/// IbbDownloadProgress 保存相册下载进度。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IbbDownloadProgress {
+    pub album_url: String,
+    pub album_title: String,
+    pub total_files: usize,
+    pub finished_files: usize,
+    pub downloaded_files: usize,
+    pub bytes_written: usize,
+    pub event: IbbDownloadProgressEvent,
+}
+
+/// IbbDownloadProgressFuture 表示相册下载进度回调 future。
+pub type IbbDownloadProgressFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// IbbDownloadProgressCallback 表示相册下载进度回调。
+pub type IbbDownloadProgressCallback =
+    Arc<dyn Fn(IbbDownloadProgress) -> IbbDownloadProgressFuture + Send + Sync + 'static>;
+
 impl IbbAlbumUrl {
     /// 解析并规整 ImgBB 相册 URL。
     pub(super) fn parse(input: &str) -> Result<Self> {
@@ -122,13 +152,31 @@ pub(super) async fn download_album(
     file_name_mode: AlbumFileNameMode,
     input_url: &str,
 ) -> Result<IbbSpiderReport> {
+    download_album_with_progress(client, base_path, file_name_mode, input_url, None).await
+}
+
+/// 执行相册 JSON 抓取、信息解析和文件下载，并推送进度。
+pub(super) async fn download_album_with_progress(
+    client: Arc<LlphaClient>,
+    base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
+    input_url: &str,
+    progress: Option<IbbDownloadProgressCallback>,
+) -> Result<IbbSpiderReport> {
     let album = IbbAlbumUrl::parse(input_url)?;
     info!(url = %album.normalized_url, "开始执行 ImgBB 相册任务");
 
     let parsed_album = fetch_album_detail(&client, &album).await?;
     let album_json = fetch_album_json(&client, &album).await?;
-    let download_summary =
-        download_album_contents(client, &base_path, &album_json, &file_name_mode).await?;
+    let download_summary = download_album_contents(
+        client,
+        &base_path,
+        &album_json,
+        &file_name_mode,
+        &album.normalized_url,
+        progress,
+    )
+    .await?;
 
     info!(
         downloaded_files = download_summary.downloaded_files,
@@ -151,9 +199,29 @@ pub(super) async fn download_album_images(
     detail: &IbbAlbumDetail,
     image_ids: &[String],
 ) -> Result<IbbSpiderReport> {
+    download_album_images_with_progress(client, base_path, file_name_mode, detail, image_ids, None)
+        .await
+}
+
+/// 下载已解析相册中的指定图片，并推送进度。
+pub(super) async fn download_album_images_with_progress(
+    client: Arc<LlphaClient>,
+    base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
+    detail: &IbbAlbumDetail,
+    image_ids: &[String],
+    progress: Option<IbbDownloadProgressCallback>,
+) -> Result<IbbSpiderReport> {
     let album = IbbAlbumUrl::parse(&detail.url)?;
     let plan = build_selected_download_plan(&base_path, detail, image_ids, &file_name_mode)?;
-    let download_summary = download_album_plan(client, plan).await?;
+    let download_summary = download_album_plan(
+        client,
+        plan,
+        album.normalized_url.clone(),
+        detail.title.clone(),
+        progress,
+    )
+    .await?;
 
     Ok(IbbSpiderReport {
         normalized_url: album.normalized_url,
@@ -330,15 +398,22 @@ async fn download_album_contents(
     base_path: &PathBuf,
     album_json: &Value,
     file_name_mode: &AlbumFileNameMode,
+    album_url: &str,
+    progress: Option<IbbDownloadProgressCallback>,
 ) -> Result<AlbumDownloadSummary> {
     let plan = build_download_plan(base_path, album_json, file_name_mode)?;
-    download_album_plan(client, plan).await
+    let album_title = required_json_string(album_json, "/album/name")?.to_string();
+
+    download_album_plan(client, plan, album_url.to_string(), album_title, progress).await
 }
 
 /// 按下载计划执行所有文件下载。
 async fn download_album_plan(
     client: Arc<LlphaClient>,
     plan: AlbumDownloadPlan,
+    album_url: String,
+    album_title: String,
+    progress: Option<IbbDownloadProgressCallback>,
 ) -> Result<AlbumDownloadSummary> {
     fs::create_dir_all(&plan.directory)
         .await
@@ -346,15 +421,49 @@ async fn download_album_plan(
 
     let pool = TaskPool::new(client.max_concurrent_requests());
     let directory = plan.directory.clone();
+    let total_files = plan.files.len();
+    let finished_files = Arc::new(AtomicUsize::new(0));
+
+    emit_album_download_progress(
+        &progress,
+        IbbDownloadProgress {
+            album_url: album_url.clone(),
+            album_title: album_title.clone(),
+            total_files,
+            finished_files: 0,
+            downloaded_files: 0,
+            bytes_written: 0,
+            event: IbbDownloadProgressEvent::TotalKnown,
+        },
+    )
+    .await;
 
     let report = pool
         .run_all(plan.files, move |file| {
             let client = client.clone();
+            let progress = progress.clone();
+            let album_url = album_url.clone();
+            let album_title = album_title.clone();
+            let finished_files = finished_files.clone();
             async move {
                 let url = file.url;
                 let path = file.path;
                 info!(url = %url, path = %path.display(), "开始下载相册文件");
                 let saved = client.download_file(url, &path).await?;
+                let finished_files = finished_files.fetch_add(1, Ordering::SeqCst) + 1;
+                emit_album_download_progress(
+                    &progress,
+                    IbbDownloadProgress {
+                        album_url,
+                        album_title,
+                        total_files,
+                        finished_files,
+                        downloaded_files: finished_files,
+                        bytes_written: saved.bytes_written,
+                        event: IbbDownloadProgressEvent::FileFinished,
+                    },
+                )
+                .await;
                 info!(path = %saved.path.display(), bytes = saved.bytes_written, "相册文件下载完成");
 
                 Ok(saved)
@@ -363,6 +472,16 @@ async fn download_album_plan(
         .await;
 
     collect_download_results(report, directory)
+}
+
+/// 执行可选的相册下载进度回调。
+async fn emit_album_download_progress(
+    callback: &Option<IbbDownloadProgressCallback>,
+    progress: IbbDownloadProgress,
+) {
+    if let Some(callback) = callback {
+        callback(progress).await;
+    }
 }
 
 /// 从已解析相册构造选中图片下载计划。

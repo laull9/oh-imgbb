@@ -18,7 +18,10 @@ use serde_json::Value;
 use tracing::info;
 use utils::extract_auth_token;
 
-pub use album::{IbbAlbumDetail, IbbAlbumImage, IbbSpiderReport};
+pub use album::{
+    IbbAlbumDetail, IbbAlbumImage, IbbDownloadProgress, IbbDownloadProgressCallback,
+    IbbDownloadProgressEvent, IbbDownloadProgressFuture, IbbSpiderReport,
+};
 pub use profile::{IbbProfileAlbum, IbbProfileBatch, IbbProfileReport};
 
 /// IbbSpiderManager 统一管理 ImgBB 相册和用户主页任务。
@@ -59,6 +62,26 @@ impl IbbSpiderManager {
         .await
     }
 
+    /// 执行相册内容下载，并在下载过程中回调进度。
+    pub async fn download_album_with_progress<F, Fut>(
+        &self,
+        input_url: impl AsRef<str>,
+        progress: F,
+    ) -> Result<IbbSpiderReport>
+    where
+        F: Fn(IbbDownloadProgress) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        album::download_album_with_progress(
+            self.client.clone(),
+            self.options.base_path.clone(),
+            self.options.file_name_mode.clone(),
+            input_url.as_ref(),
+            Some(Arc::new(move |event| Box::pin(progress(event)))),
+        )
+        .await
+    }
+
     /// 下载已解析相册中的指定图片。
     pub async fn download_album_images(
         &self,
@@ -71,6 +94,28 @@ impl IbbSpiderManager {
             self.options.file_name_mode.clone(),
             detail,
             image_ids,
+        )
+        .await
+    }
+
+    /// 下载已解析相册中的指定图片，并在下载过程中回调进度。
+    pub async fn download_album_images_with_progress<F, Fut>(
+        &self,
+        detail: &IbbAlbumDetail,
+        image_ids: &[String],
+        progress: F,
+    ) -> Result<IbbSpiderReport>
+    where
+        F: Fn(IbbDownloadProgress) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        album::download_album_images_with_progress(
+            self.client.clone(),
+            self.options.base_path.clone(),
+            self.options.file_name_mode.clone(),
+            detail,
+            image_ids,
+            Some(Arc::new(move |event| Box::pin(progress(event)))),
         )
         .await
     }

@@ -3,6 +3,7 @@
 mod app_state;
 mod commands;
 mod db;
+mod download_tasks;
 mod settings;
 mod thumbnail_cache;
 
@@ -24,9 +25,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::parse::parse_album,
             commands::parse::parse_profile,
+            commands::parse::list_parse_tabs,
+            commands::parse::save_parse_tab,
+            commands::parse::remove_parse_tab,
+            commands::parse::set_active_parse_tab,
             commands::download::download_album,
             commands::download::download_album_images,
             commands::download::download_profile_albums,
+            commands::download::list_download_tasks,
+            commands::download::cancel_download_task,
+            commands::image_detail::download_detail_image,
+            commands::image_detail::remove_detail_image,
             commands::favorite::list_favorites,
             commands::favorite::save_favorite,
             commands::favorite::remove_favorite,

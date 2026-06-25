@@ -3,6 +3,7 @@ import { App, Button, Form, Input, InputNumber, Space, Switch, Typography } from
 import { useEffect, useState } from "react";
 import { clearThumbnailCache, getSettings, updateSettings } from "../api/tauri_client";
 import type { AppSettings } from "../api/types";
+import styles from "../css/settings_page.module.css";
 
 export function SettingsPage() {
   const { message } = App.useApp();
@@ -42,7 +43,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="settings-panel">
+    <div className={styles.panel}>
       <Typography.Title level={4}>下载与缓存</Typography.Title>
       <Form form={form} layout="vertical" onFinish={handleFinish}>
         <Form.Item label="下载目录" name="download_dir" rules={[{ required: true }]}>
@@ -66,7 +67,17 @@ export function SettingsPage() {
         <Form.Item label="启动时恢复上次页面" name="restore_last_page" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Space className="settings-actions">
+        <Typography.Title level={4}>解析显示</Typography.Title>
+        <Form.Item label="启用分页" name="pagination_enabled" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Form.Item label="个人空间每页相册数" name="profile_page_size">
+          <InputNumber min={1} max={200} />
+        </Form.Item>
+        <Form.Item label="相册每页图片数" name="album_page_size">
+          <InputNumber min={1} max={500} />
+        </Form.Item>
+        <Space className={styles.actions}>
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={loading}>
             保存
           </Button>

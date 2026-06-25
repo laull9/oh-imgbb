@@ -2,5 +2,6 @@
 
 pub mod download;
 pub mod favorite;
+pub mod image_detail;
 pub mod parse;
 pub mod settings;

@@ -1,0 +1,41 @@
+.pageStack {
+  width: 100%;
+  min-height: 0;
+}
+
+.resultHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.resultHeader h4 {
+  margin: 0 0 4px;
+}
+
+.list {
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.rowDetail {
+  width: min(720px, 100%);
+}
+
+.titleText {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}

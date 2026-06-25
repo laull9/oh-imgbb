@@ -1,0 +1,89 @@
+.pageStack {
+  width: 100%;
+  min-height: 0;
+}
+
+.resultHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.resultHeader h4 {
+  margin: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  overflow: hidden;
+}
+
+.card :global(.ant-card-body) {
+  padding: 0;
+}
+
+.cover {
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--muted-bg);
+}
+
+.cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover span {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--panel-strong-bg);
+}
+
+.body {
+  width: 100%;
+  padding: 12px;
+}
+
+.titleRow {
+  width: 100%;
+  min-width: 0;
+  justify-content: space-between;
+}
+
+.titleRow :global(.ant-typography) {
+  min-width: 0;
+}
+
+.titleRow :global(.ant-space-item:first-child) {
+  min-width: 0;
+  flex: 1;
+}
+
+.empty {
+  padding: 36px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+@media (max-width: 560px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

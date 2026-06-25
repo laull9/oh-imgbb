@@ -3,10 +3,12 @@ import type {
   AlbumDetail,
   AppSettings,
   CachedResponse,
-  DownloadBatchReport,
-  DownloadReport,
+  DetailImageResponse,
+  DownloadTaskRecord,
   FavoriteInput,
   FavoriteRecord,
+  ParseTabInput,
+  ParseTabRecord,
   ProfileDetail,
 } from "./types";
 
@@ -21,19 +23,43 @@ export async function parseProfile(url: string, refresh: boolean) {
   });
 }
 
+export async function listParseTabs() {
+  return invoke<ParseTabRecord[]>("list_parse_tabs");
+}
+
+export async function saveParseTab(tab: ParseTabInput) {
+  return invoke<void>("save_parse_tab", { tab });
+}
+
+export async function removeParseTab(tabKey: string) {
+  return invoke<void>("remove_parse_tab", { tabKey });
+}
+
+export async function setActiveParseTab(tabKey?: string) {
+  return invoke<void>("set_active_parse_tab", { tabKey });
+}
+
 export async function downloadAlbum(url: string) {
-  return invoke<DownloadReport>("download_album", { url });
+  return invoke<DownloadTaskRecord>("download_album", { url });
 }
 
 export async function downloadAlbumImages(album: AlbumDetail, imageIds: string[]) {
-  return invoke<DownloadReport>("download_album_images", {
+  return invoke<DownloadTaskRecord>("download_album_images", {
     album,
     imageIds,
   });
 }
 
 export async function downloadProfileAlbums(urls: string[]) {
-  return invoke<DownloadBatchReport>("download_profile_albums", { urls });
+  return invoke<DownloadTaskRecord>("download_profile_albums", { urls });
+}
+
+export async function listDownloadTasks() {
+  return invoke<DownloadTaskRecord[]>("list_download_tasks");
+}
+
+export async function cancelDownloadTask(id: number) {
+  return invoke<DownloadTaskRecord>("cancel_download_task", { id });
 }
 
 export async function listFavorites(kind?: string) {
@@ -58,4 +84,12 @@ export async function updateSettings(settings: AppSettings) {
 
 export async function clearThumbnailCache() {
   return invoke<void>("clear_thumbnail_cache");
+}
+
+export async function downloadDetailImage(url: string) {
+  return invoke<DetailImageResponse>("download_detail_image", { url });
+}
+
+export async function removeDetailImage(path: string) {
+  return invoke<void>("remove_detail_image", { path });
 }

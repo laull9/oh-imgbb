@@ -1,0 +1,141 @@
+.pageStack {
+  width: 100%;
+  min-height: 0;
+}
+
+.browserTabs {
+  width: 100%;
+}
+
+.browserTabs > :global(.ant-tabs-content-holder) {
+  min-height: 0;
+}
+
+.browserTabs :global(.ant-tabs-tab) {
+  max-width: 240px;
+}
+
+.browserTabs :global(.ant-tabs-tab .ant-space) {
+  min-width: 0;
+}
+
+.browserTabs :global(.ant-tabs-tab .ant-space-item:first-child) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabTitleText {
+  display: inline-block;
+  max-width: 148px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(360px, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.urlInput {
+  min-width: 0;
+}
+
+.resultHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.resultHeader h4 {
+  margin: 0 0 4px;
+}
+
+.resultTitle {
+  min-width: 0;
+}
+
+.resultTitle :global(.ant-typography) {
+  max-width: 100%;
+}
+
+.resultActions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.resultSearch {
+  width: 220px;
+  min-width: 180px;
+}
+
+.profileList {
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.profileCoverImage {
+  object-fit: contain;
+  background: var(--muted-bg);
+}
+
+.profileCoverPlaceholder {
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--muted-bg);
+}
+
+@media (max-width: 1180px) {
+  .resultHeader {
+    grid-template-columns: 1fr;
+  }
+
+  .resultActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .resultSearch {
+    flex: 1 1 260px;
+    width: auto;
+    max-width: 440px;
+  }
+}
+
+@media (max-width: 980px) {
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .resultActions {
+    gap: 10px !important;
+  }
+
+  .resultSearch {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}

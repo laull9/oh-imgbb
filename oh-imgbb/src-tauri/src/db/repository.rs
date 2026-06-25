@@ -5,7 +5,7 @@ use chrono::Utc;
 use imgbb::ibb_spider::{IbbAlbumDetail, IbbProfileReport};
 use sqlx::{Row, SqlitePool};
 
-use crate::db::models::{FavoriteInput, FavoriteRecord};
+use crate::db::models::{FavoriteInput, FavoriteRecord, ParseTabInput, ParseTabRecord};
 use crate::settings::AppSettings;
 
 const SETTINGS_KEY: &str = "app_settings";
@@ -259,6 +259,95 @@ pub async fn save_favorite(pool: &SqlitePool, favorite: &FavoriteInput) -> Resul
 pub async fn remove_favorite(pool: &SqlitePool, id: i64) -> Result<()> {
     sqlx::query("DELETE FROM favorites WHERE id = ?")
         .bind(id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// 读取可恢复的解析标签页列表。
+pub async fn list_parse_tabs(pool: &SqlitePool) -> Result<Vec<ParseTabRecord>> {
+    let rows = sqlx::query("SELECT * FROM parse_tabs ORDER BY sort_index ASC, updated_at ASC")
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ParseTabRecord {
+            tab_key: row.get("tab_key"),
+            kind: row.get("kind"),
+            title: row.get("title"),
+            url: row.get("url"),
+            sort_index: row.get("sort_index"),
+            active: row.get::<i64, _>("active") != 0,
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        })
+        .collect())
+}
+
+/// 保存或更新解析标签页。
+pub async fn save_parse_tab(pool: &SqlitePool, tab: &ParseTabInput) -> Result<()> {
+    let now = now_string();
+    if tab.active {
+        clear_active_parse_tab(pool).await?;
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO parse_tabs
+          (tab_key, kind, title, url, sort_index, active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tab_key) DO UPDATE SET
+          kind = excluded.kind,
+          title = excluded.title,
+          url = excluded.url,
+          sort_index = excluded.sort_index,
+          active = excluded.active,
+          updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(&tab.tab_key)
+    .bind(&tab.kind)
+    .bind(&tab.title)
+    .bind(&tab.url)
+    .bind(tab.sort_index)
+    .bind(if tab.active { 1_i64 } else { 0_i64 })
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// 删除解析标签页。
+pub async fn remove_parse_tab(pool: &SqlitePool, tab_key: &str) -> Result<()> {
+    sqlx::query("DELETE FROM parse_tabs WHERE tab_key = ?")
+        .bind(tab_key)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// 设置当前激活的解析标签页。
+pub async fn set_active_parse_tab(pool: &SqlitePool, tab_key: Option<&str>) -> Result<()> {
+    clear_active_parse_tab(pool).await?;
+    if let Some(tab_key) = tab_key {
+        sqlx::query("UPDATE parse_tabs SET active = 1, updated_at = ? WHERE tab_key = ?")
+            .bind(now_string())
+            .bind(tab_key)
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// 清空解析标签页激活状态。
+async fn clear_active_parse_tab(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("UPDATE parse_tabs SET active = 0")
         .execute(pool)
         .await?;
 

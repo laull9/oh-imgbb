@@ -18,7 +18,16 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "small-imgs/**/*",
+          "**/small-imgs/**/*",
+          "detail-tmp/**/*",
+          "**/detail-tmp/**/*"
+        ]
+      }
     }
   },
   "bundle": {

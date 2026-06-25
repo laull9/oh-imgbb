@@ -44,10 +44,26 @@ pub struct DownloadReport {
     pub bytes_written: usize,
 }
 
-/// DownloadBatchReport 保存批量下载命令的摘要。
+/// ParseTabRecord 保存一个可恢复的解析结果标签页。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DownloadBatchReport {
-    pub reports: Vec<DownloadReport>,
-    pub downloaded_files: usize,
-    pub bytes_written: usize,
+pub struct ParseTabRecord {
+    pub tab_key: String,
+    pub kind: String,
+    pub title: String,
+    pub url: String,
+    pub sort_index: i64,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// ParseTabInput 保存解析标签页写入参数。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ParseTabInput {
+    pub tab_key: String,
+    pub kind: String,
+    pub title: String,
+    pub url: String,
+    pub sort_index: i64,
+    pub active: bool,
 }

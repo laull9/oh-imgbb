@@ -1,0 +1,60 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+}
+
+.image {
+  position: relative;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--muted-bg);
+}
+
+.image img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.imageButton {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  cursor: zoom-in;
+}
+
+.meta {
+  width: 100%;
+  padding: 8px;
+}
+
+.meta :global(.ant-typography) {
+  max-width: 120px;
+}
+
+.loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}

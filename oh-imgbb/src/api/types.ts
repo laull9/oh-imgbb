@@ -20,6 +20,18 @@ export interface AlbumImage {
   sort_index: number;
 }
 
+export interface AlbumThumbnailEvent {
+  album_url: string;
+  image_id: string;
+  thumbnail_url?: string;
+  local_thumbnail_path?: string;
+  error?: string;
+}
+
+export interface DetailImageResponse {
+  local_path: string;
+}
+
 export interface ProfileDetail {
   url: string;
   albums: ProfileAlbum[];
@@ -45,6 +57,9 @@ export interface AppSettings {
   thumbnail_cache_enabled: boolean;
   thumbnail_cache_limit_mb: number;
   restore_last_page: boolean;
+  pagination_enabled: boolean;
+  profile_page_size: number;
+  album_page_size: number;
 }
 
 export interface FavoriteRecord {
@@ -79,4 +94,46 @@ export interface DownloadBatchReport {
   reports: DownloadReport[];
   downloaded_files: number;
   bytes_written: number;
+}
+
+export type DownloadTaskStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export interface DownloadTaskRecord {
+  id: number;
+  title: string;
+  target_kind: string;
+  target_url: string;
+  status: DownloadTaskStatus;
+  total_items: number;
+  finished_items: number;
+  downloaded_files: number;
+  bytes_written: number;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ParseTabRecord {
+  tab_key: string;
+  kind: "album" | "profile";
+  title: string;
+  url: string;
+  sort_index: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ParseTabInput {
+  tab_key: string;
+  kind: "album" | "profile";
+  title: string;
+  url: string;
+  sort_index: number;
+  active: boolean;
 }
