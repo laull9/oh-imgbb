@@ -19,6 +19,18 @@
   margin: 0;
 }
 
+.headerActions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.searchInput {
+  width: 260px;
+  max-width: 100%;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -83,6 +95,16 @@
 }
 
 @media (max-width: 560px) {
+  .headerActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .searchInput {
+    flex: 1 1 100%;
+    width: auto;
+  }
+
   .grid {
     grid-template-columns: 1fr;
   }

@@ -36,7 +36,7 @@
 
 .toolbar {
   display: grid;
-  grid-template-columns: auto minmax(360px, 1fr) auto auto;
+  grid-template-columns: minmax(360px, 1fr) auto auto auto;
   gap: 12px;
   align-items: center;
   padding: 14px;

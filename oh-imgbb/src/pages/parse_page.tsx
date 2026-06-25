@@ -5,6 +5,7 @@ import {
   HeartOutlined,
   ReloadOutlined,
   SearchOutlined,
+  SnippetsOutlined,
 } from "@ant-design/icons";
 import {
   App,
@@ -15,7 +16,6 @@ import {
   Input,
   List,
   Pagination,
-  Segmented,
   Space,
   Spin,
   Switch,
@@ -108,7 +108,6 @@ const DEFAULT_DISPLAY_SETTINGS = {
 
 export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: ParsePageProps) {
   const { message } = App.useApp();
-  const [kind, setKind] = useState<ParseKind>("album");
   const [url, setUrl] = useState("");
   const [refresh, setRefresh] = useState(false);
   const [parserLoading, setParserLoading] = useState(false);
@@ -117,6 +116,7 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
     { key: PARSER_TAB_KEY, kind: "parser", title: "解析" },
   ]);
   const [displaySettings, setDisplaySettings] = useState(DEFAULT_DISPLAY_SETTINGS);
+  const [tabsRestored, setTabsRestored] = useState(false);
   const pendingProfileTabKey = useRef<string | undefined>(undefined);
   const tabHistoryRef = useRef<string[]>([PARSER_TAB_KEY]);
 
@@ -158,11 +158,16 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
         ]);
         setActiveKey(restoredActiveKey);
         rememberTab(restoredActiveKey);
+        setTabsRestored(true);
 
         await Promise.all(records.map((record) => loadRestoredTab(record)));
       } catch (error) {
         if (!disposed) {
           message.error(String(error));
+        }
+      } finally {
+        if (!disposed) {
+          setTabsRestored(true);
         }
       }
     }
@@ -289,7 +294,7 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
   }, []);
 
   useEffect(() => {
-    if (!openTarget) {
+    if (!openTarget || !tabsRestored) {
       return;
     }
 
@@ -299,7 +304,7 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
       void openProfileTab(openTarget.url, false, openTarget.title);
     }
     onTargetHandled?.(openTarget.id);
-  }, [openTarget]);
+  }, [openTarget, tabsRestored]);
 
   async function handleParse() {
     const inputUrl = url.trim();
@@ -310,7 +315,13 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
 
     setParserLoading(true);
     try {
-      if (kind === "album") {
+      const detectedKind = detectParseKind(inputUrl);
+      if (!detectedKind) {
+        message.warning("未识别为 ImgBB 相册或个人空间地址");
+        return;
+      }
+
+      if (detectedKind === "album") {
         await openAlbumTab(inputUrl, refresh);
         return;
       }
@@ -318,6 +329,26 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
       await openProfileTab(inputUrl, refresh);
     } finally {
       setParserLoading(false);
+    }
+  }
+
+  async function handleImportClipboard() {
+    if (!navigator.clipboard?.readText) {
+      message.error("当前环境不支持读取剪切板");
+      return;
+    }
+
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) {
+        message.warning("剪切板没有可导入的内容");
+        return;
+      }
+
+      setUrl(text);
+      message.success("已从剪切板导入");
+    } catch (error) {
+      message.error(`读取剪切板失败：${String(error)}`);
     }
   }
 
@@ -683,7 +714,15 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
         closable: tab.key !== PARSER_TAB_KEY,
         children:
           tab.kind === "parser"
-            ? renderParserTab(kind, setKind, url, setUrl, refresh, setRefresh, parserLoading, handleParse)
+            ? renderParserTab(
+                url,
+                setUrl,
+                refresh,
+                setRefresh,
+                parserLoading,
+                handleParse,
+                handleImportClipboard,
+              )
             : tab.kind === "album"
               ? renderAlbumTab(
                   tab,
@@ -709,7 +748,7 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
                   displaySettings,
                 ),
       })),
-    [tabs, kind, url, refresh, parserLoading, displaySettings],
+    [tabs, url, refresh, parserLoading, displaySettings],
   );
 
   return (
@@ -759,34 +798,28 @@ function recordToTab(record: ParseTabRecord): ParseTab {
 }
 
 function renderParserTab(
-  kind: ParseKind,
-  setKind: (value: ParseKind) => void,
   url: string,
   setUrl: (value: string) => void,
   refresh: boolean,
   setRefresh: (value: boolean) => void,
   parserLoading: boolean,
   handleParse: () => void,
+  importClipboard: () => void,
 ) {
   return (
     <Space direction="vertical" size={16} className={styles.pageStack}>
       <div className={styles.toolbar}>
-        <Segmented
-          value={kind}
-          onChange={(value) => setKind(value as ParseKind)}
-          options={[
-            { label: "相册", value: "album" },
-            { label: "个人空间", value: "profile" },
-          ]}
-        />
         <Input
           value={url}
           onChange={(event) => setUrl(event.target.value)}
           onPressEnter={handleParse}
-          placeholder="https://ibb.co/album/..."
+          placeholder="粘贴 ImgBB 相册或个人空间地址"
           prefix={<SearchOutlined />}
           className={styles.urlInput}
         />
+        <Button icon={<SnippetsOutlined />} onClick={importClipboard}>
+          从剪切板导入
+        </Button>
         <Space>
           <Typography.Text>刷新</Typography.Text>
           <Switch checked={refresh} onChange={setRefresh} />
@@ -1129,6 +1162,30 @@ function removeSelection(current: string[], removed: string[]) {
 
 function buildTabKey(kind: ParseKind, inputUrl: string) {
   return `${kind}:${normalizeComparableUrl(inputUrl)}`;
+}
+
+// detectParseKind 根据 URL 形态自动判断解析目标类型。
+function detectParseKind(inputUrl: string): ParseKind | undefined {
+  const value = inputUrl.trim();
+  const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+
+  try {
+    const parsed = new URL(withScheme);
+    const host = parsed.hostname.toLowerCase();
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+
+    if ((host === "ibb.co" || host === "www.ibb.co") && pathParts[0] === "album" && pathParts[1]) {
+      return "album";
+    }
+
+    if (host.endsWith(".imgbb.com")) {
+      return "profile";
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
 }
 
 function normalizeComparableUrl(inputUrl: string) {

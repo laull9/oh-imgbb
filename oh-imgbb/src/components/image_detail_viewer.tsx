@@ -2,13 +2,14 @@ import {
   CloseOutlined,
   LeftOutlined,
   MinusOutlined,
+  OneToOneOutlined,
   PlusOutlined,
   ReloadOutlined,
   RightOutlined,
 } from "@ant-design/icons";
 import { App, Button, Spin, Tooltip, Typography } from "antd";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { type PointerEvent, type WheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import { downloadDetailImage, removeDetailImage } from "../api/tauri_client";
 import type { AlbumImage } from "../api/types";
 import styles from "../css/image_detail_viewer.module.css";
@@ -21,8 +22,22 @@ interface ImageDetailViewerProps {
 }
 
 const MIN_SCALE = 0.25;
-const MAX_SCALE = 4;
+const MAX_SCALE = 10;
 const SCALE_STEP = 0.25;
+const WHEEL_SCALE_STEP = 0.12;
+
+// ImageOffset 保存图片相对中心点的偏移。
+interface ImageOffset {
+  x: number;
+  y: number;
+}
+
+// DragState 保存当前拖拽指针和上一次坐标。
+interface DragState {
+  pointerId: number;
+  lastX: number;
+  lastY: number;
+}
 
 // ImageDetailViewer 展示详情图遮罩并处理缩放和切换。
 export function ImageDetailViewer({
@@ -36,7 +51,10 @@ export function ImageDetailViewer({
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState<string>();
   const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState<ImageOffset>({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const dragStateRef = useRef<DragState | undefined>(undefined);
   const open = currentIndex !== undefined;
   const currentImage = open ? images[currentIndex] : undefined;
   const previewSrc = useMemo(() => {
@@ -65,6 +83,9 @@ export function ImageDetailViewer({
     setDetailPath(undefined);
     setErrorText(undefined);
     setScale(1);
+    setOffset({ x: 0, y: 0 });
+    setDragging(false);
+    dragStateRef.current = undefined;
     setLoading(true);
 
     downloadDetailImage(currentImage.image_url)
@@ -148,6 +169,70 @@ export function ImageDetailViewer({
     setScale((value) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, value + offset)));
   }
 
+  // resetView 把图片位置和大小恢复为默认查看状态。
+  function resetView() {
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+  }
+
+  // handleWheel 处理鼠标滚轮缩放。
+  function handleWheel(event: WheelEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const direction = event.deltaY > 0 ? -1 : 1;
+
+    setScale((value) =>
+      Math.min(MAX_SCALE, Math.max(MIN_SCALE, value + direction * WHEEL_SCALE_STEP)),
+    );
+  }
+
+  // handlePointerDown 开始拖拽移动图片。
+  function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (!previewSrc && !detailSrc) {
+      return;
+    }
+
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      lastX: event.clientX,
+      lastY: event.clientY,
+    };
+    setDragging(true);
+  }
+
+  // handlePointerMove 根据鼠标位移更新图片偏移。
+  function handlePointerMove(event: PointerEvent<HTMLDivElement>) {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = event.clientX - dragState.lastX;
+    const deltaY = event.clientY - dragState.lastY;
+    dragStateRef.current = {
+      ...dragState,
+      lastX: event.clientX,
+      lastY: event.clientY,
+    };
+    setOffset((value) => ({ x: value.x + deltaX, y: value.y + deltaY }));
+  }
+
+  // handlePointerEnd 结束当前拖拽状态。
+  function handlePointerEnd(event: PointerEvent<HTMLDivElement>) {
+    if (dragStateRef.current?.pointerId === event.pointerId) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+      dragStateRef.current = undefined;
+      setDragging(false);
+    }
+  }
+
+  const imageTransform = `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})`;
+
   return (
     <div className={styles.overlay} role="dialog" aria-modal="true">
       <div className={styles.topbar}>
@@ -173,6 +258,9 @@ export function ImageDetailViewer({
               disabled={scale >= MAX_SCALE}
               onClick={() => changeScale(SCALE_STEP)}
             />
+          </Tooltip>
+          <Tooltip title="还原">
+            <Button shape="circle" icon={<OneToOneOutlined />} onClick={resetView} />
           </Tooltip>
           <Tooltip title="重新加载">
             <Button
@@ -207,13 +295,21 @@ export function ImageDetailViewer({
         />
       </Tooltip>
 
-      <div className={styles.stage}>
+      <div
+        className={`${styles.stage} ${dragging ? styles.stageDragging : ""}`}
+        onWheelCapture={handleWheel}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
+      >
         {previewSrc && (
           <img
             className={detailSrc && !loading ? styles.image : `${styles.image} ${styles.preview}`}
             src={detailSrc && !loading ? detailSrc : previewSrc}
             alt={currentImage.filename}
-            style={{ transform: `scale(${scale})` }}
+            draggable={false}
+            style={{ transform: imageTransform }}
           />
         )}
         {loading && (
@@ -231,7 +327,8 @@ export function ImageDetailViewer({
             className={styles.image}
             src={detailSrc}
             alt={currentImage.filename}
-            style={{ transform: `scale(${scale})` }}
+            draggable={false}
+            style={{ transform: imageTransform }}
           />
         )}
       </div>
