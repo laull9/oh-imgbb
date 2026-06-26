@@ -33,7 +33,7 @@ impl AppSettings {
             download_dir: download_dir.to_string_lossy().to_string(),
             max_concurrent_downloads: 8,
             max_retries: 3,
-            file_name_pattern: Some("{album}_{count}_{name}".to_string()),
+            file_name_pattern: Some("{album}_{count}".to_string()),
             imgbb_login_subject: None,
             imgbb_password: None,
             thumbnail_cache_enabled: true,

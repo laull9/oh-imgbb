@@ -92,6 +92,44 @@
   background: var(--panel-bg);
 }
 
+.profileList :global(.ant-list-item .ant-list-item-action) {
+  margin-inline-start: 8px !important;
+}
+
+.profileList :global(.ant-list-item .ant-list-item-action > li) {
+  padding-inline: 3px !important;
+}
+
+.profileList :global(.ant-list-item .ant-list-item-action > li:first-child) {
+  padding-inline-start: 0 !important;
+}
+
+.profileList :global(.ant-list-item .ant-list-item-action > li:last-child) {
+  padding-inline-end: 0 !important;
+}
+
+.profileList :global(.ant-list-item .ant-list-item-action .ant-btn) {
+  height: 32px !important;
+  padding-inline: 4px !important;
+}
+
+.profileList :global(.ant-list-item .ant-list-item-action .ant-checkbox-wrapper) {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  line-height: 32px;
+  padding-inline: 4px !important;
+}
+
+.profileList :global(.ant-list-item .ant-list-item-action .ant-checkbox) {
+  top: 0;
+}
+
+.profileList :global(.ant-list-item .ant-list-item-action .ant-checkbox + span) {
+  line-height: 22px;
+  padding-inline-end: 0 !important;
+}
+
 .profileCoverImage {
   object-fit: contain;
   background: var(--muted-bg);

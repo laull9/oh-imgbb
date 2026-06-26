@@ -400,8 +400,8 @@ export interface ProfileAlbum {
 
 - 是否将 `imgbb` crate 改成 library + binary 双入口，供 `oh-imgbb` 直接依赖。
 - 下载目录是否默认使用系统下载目录，还是应用数据目录下的 `downloads`。
-- 文件命名模板首版是否沿用当前 `{album}_{count}_{name}` 风格。
-- 缩略图缓存是否需要大小上限，默认建议 512 MB。
+- 文件命名模板首版是否沿用当前 `{album}_{count}` 风格。
+- 缩略图缓存是否需要大小上限，默认建议 64 MB。
 - 个人空间批量下载时，是否默认每个相册单独建目录。
 
 ## 开发约定

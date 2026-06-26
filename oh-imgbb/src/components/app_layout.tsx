@@ -44,7 +44,9 @@ export function AppLayout() {
         <ParsePage
           openTarget={openTarget}
           onTargetHandled={(id) =>
-            setOpenTarget((current) => (current?.id === id ? undefined : current))
+            setOpenTarget((current) =>
+              current?.id === id ? undefined : current,
+            )
           }
           onOpenDownloads={() => setPage("downloads")}
         />
@@ -66,7 +68,7 @@ export function AppLayout() {
   if (use_side_nav) {
     return (
       <Layout className={styles.shell}>
-        <Sider width={216} className={styles.sidebar}>
+        <Sider width={186} className={styles.sidebar}>
           <div className={styles.brand}>
             <img src="/oh-ibb.png" alt="" />
             <Typography.Title level={4}>oh-imgbb</Typography.Title>
