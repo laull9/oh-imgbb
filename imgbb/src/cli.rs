@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use llpha::DEFAULT_CONFIG_PATH;
 
+/// DEFAULT_SESSION_PATH 表示 CLI 默认登录态文件。
+pub const DEFAULT_SESSION_PATH: &str = ".imgbb-session.json";
+
 /// Cli 保存 ImgBB 命令行全局参数和子命令。
 #[derive(Debug, Parser)]
 #[command(name = "imgbb", version, about = "基于 Llpha 的 ImgBB 爬虫工具")]
@@ -12,6 +15,10 @@ pub struct Cli {
     /// config 指定全局配置文件路径。
     #[arg(short, long, default_value = DEFAULT_CONFIG_PATH)]
     pub config: PathBuf,
+
+    /// session 指定 CLI 登录态文件路径。
+    #[arg(long, default_value = DEFAULT_SESSION_PATH)]
+    pub session: PathBuf,
 
     /// command 指定要执行的业务任务。
     #[command(subcommand)]
@@ -36,6 +43,10 @@ pub enum ImgbbCommand {
     #[command(alias = "ibb-profile")]
     Profile(IbbProfileArgs),
 
+    /// 列出当前已登录账号的相册。
+    #[command(alias = "my-albums", alias = "mine-albums")]
+    Mine(IbbMineArgs),
+
     /// 解析相册信息并输出图片列表。
     ParseAlbum(IbbParseAlbumArgs),
 
@@ -47,6 +58,12 @@ pub enum ImgbbCommand {
 
     /// 校验登录凭据并输出登录态摘要。
     Login(IbbLoginArgs),
+
+    /// 查看已保存的 CLI 登录态。
+    Status,
+
+    /// 删除已保存的 CLI 登录态。
+    Logout,
 
     /// 创建已登录账号下的新相册。
     CreateAlbum(IbbCreateAlbumArgs),
@@ -126,9 +143,21 @@ pub struct IbbAlbumArgs {
 /// IbbProfileArgs 保存 ImgBB 用户主页任务参数。
 #[derive(Debug, Parser)]
 pub struct IbbProfileArgs {
-    /// url 指定 ImgBB 用户相册列表地址。
-    pub url: String,
+    /// url 指定 ImgBB 用户相册列表地址；省略时使用已保存登录态中的个人空间。
+    pub url: Option<String>,
 
+    /// auth 保存可选登录凭据。
+    #[command(flatten)]
+    pub auth: IbbAuthArgs,
+
+    /// output 保存输出格式。
+    #[command(flatten)]
+    pub output: IbbOutputArgs,
+}
+
+/// IbbMineArgs 保存当前账号相册列表参数。
+#[derive(Debug, Parser)]
+pub struct IbbMineArgs {
     /// auth 保存可选登录凭据。
     #[command(flatten)]
     pub auth: IbbAuthArgs,
@@ -175,8 +204,8 @@ pub struct IbbImagesArgs {
 /// IbbProfileDownloadArgs 保存个人空间批量下载参数。
 #[derive(Debug, Parser)]
 pub struct IbbProfileDownloadArgs {
-    /// url 指定 ImgBB 用户相册列表地址。
-    pub url: String,
+    /// url 指定 ImgBB 用户相册列表地址；省略时使用已保存登录态中的个人空间。
+    pub url: Option<String>,
 
     /// album_url 指定要下载的相册地址，可重复传入；不传则下载当前个人空间全部相册。
     #[arg(long = "album-url")]
@@ -330,6 +359,7 @@ mod tests {
         ]);
 
         assert_eq!(cli.config, PathBuf::from("custom.toml"));
+        assert_eq!(cli.session, PathBuf::from(DEFAULT_SESSION_PATH));
         match cli.command {
             ImgbbCommand::Album(args) => {
                 assert_eq!(args.url, "https://ibb.co/album/ABC123");
@@ -386,8 +416,44 @@ mod tests {
 
         match cli.command {
             ImgbbCommand::Profile(args) => {
-                assert_eq!(args.url, "https://beautif11.imgbb.com/albums?list=albums");
+                assert_eq!(
+                    args.url.as_deref(),
+                    Some("https://beautif11.imgbb.com/albums?list=albums")
+                );
             }
+            _ => panic!("解析到了错误的子命令"),
+        }
+    }
+
+    /// 验证 CLI 可以省略个人空间 URL。
+    #[test]
+    fn profile_url_is_optional() {
+        let cli = Cli::parse_from(["imgbb", "profile"]);
+
+        match cli.command {
+            ImgbbCommand::Profile(args) => assert!(args.url.is_none()),
+            _ => panic!("解析到了错误的子命令"),
+        }
+    }
+
+    /// 验证 CLI 可以解析当前账号相册列表子命令。
+    #[test]
+    fn cli_parses_mine_command() {
+        let cli = Cli::parse_from(["imgbb", "mine", "--json"]);
+
+        match cli.command {
+            ImgbbCommand::Mine(args) => assert!(args.output.json),
+            _ => panic!("解析到了错误的子命令"),
+        }
+    }
+
+    /// 验证当前账号相册列表子命令保留易读别名。
+    #[test]
+    fn my_albums_alias_maps_to_mine_command() {
+        let cli = Cli::parse_from(["imgbb", "my-albums"]);
+
+        match cli.command {
+            ImgbbCommand::Mine(args) => assert!(!args.output.json),
             _ => panic!("解析到了错误的子命令"),
         }
     }

@@ -1,37 +1,56 @@
 mod cli;
+mod session;
 
-use std::env;
-
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use cli::*;
 use imgbb::ibb_spider::*;
 use llpha::*;
+use session::{
+    CliContext, load_saved_session, optional_login_session, print_session_summary,
+    require_login_session, resolve_credentials, resolve_profile_url, save_session,
+};
 
 /// main 初始化框架并分发 ImgBB CLI 子命令。
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse_args();
-    let config = AppConfig::from_path(&cli.config)?;
+    let mut config = AppConfig::from_path(&cli.config)?;
+    apply_cli_logging_defaults(&mut config);
     let _logging_guard = init_logging(&config.logging)?;
     LlphaClient::init_global(&config.request)?;
+    let context = CliContext {
+        session_path: cli.session.clone(),
+    };
 
     match cli.command {
         ImgbbCommand::Album(args) => run_ibb_album(args).await?,
-        ImgbbCommand::Profile(args) => run_ibb_profile(args).await?,
-        ImgbbCommand::ParseAlbum(args) => run_parse_album(args).await?,
-        ImgbbCommand::Images(args) => run_ibb_images(args).await?,
-        ImgbbCommand::ProfileDownload(args) => run_profile_download(args).await?,
-        ImgbbCommand::Login(args) => run_login(args).await?,
-        ImgbbCommand::CreateAlbum(args) => run_create_album(args).await?,
-        ImgbbCommand::UploadImage(args) => run_upload_image(args).await?,
-        ImgbbCommand::DeleteImage(args) => run_delete_image(args).await?,
-        ImgbbCommand::DeleteAlbum(args) => run_delete_album(args).await?,
-        ImgbbCommand::UploadProfileBackground(args) => run_upload_profile_background(args).await?,
-        ImgbbCommand::DeleteProfileBackground(args) => run_delete_profile_background(args).await?,
-        ImgbbCommand::EditImage(args) => run_edit_image(args).await?,
+        ImgbbCommand::Profile(args) => run_ibb_profile(&context, args).await?,
+        ImgbbCommand::Mine(args) => run_mine(&context, args).await?,
+        ImgbbCommand::ParseAlbum(args) => run_parse_album(&context, args).await?,
+        ImgbbCommand::Images(args) => run_ibb_images(&context, args).await?,
+        ImgbbCommand::ProfileDownload(args) => run_profile_download(&context, args).await?,
+        ImgbbCommand::Login(args) => run_login(&context, args).await?,
+        ImgbbCommand::Status => run_status(&context)?,
+        ImgbbCommand::Logout => run_logout(&context)?,
+        ImgbbCommand::CreateAlbum(args) => run_create_album(&context, args).await?,
+        ImgbbCommand::UploadImage(args) => run_upload_image(&context, args).await?,
+        ImgbbCommand::DeleteImage(args) => run_delete_image(&context, args).await?,
+        ImgbbCommand::DeleteAlbum(args) => run_delete_album(&context, args).await?,
+        ImgbbCommand::UploadProfileBackground(args) => {
+            run_upload_profile_background(&context, args).await?
+        }
+        ImgbbCommand::DeleteProfileBackground(args) => {
+            run_delete_profile_background(&context, args).await?
+        }
+        ImgbbCommand::EditImage(args) => run_edit_image(&context, args).await?,
     }
 
     Ok(())
+}
+
+/// 应用 CLI 模式的日志默认值。
+fn apply_cli_logging_defaults(config: &mut AppConfig) {
+    config.logging.level = "warn".to_string();
 }
 
 /// 执行 ImgBB 相册抓取和下载任务。
@@ -57,10 +76,27 @@ async fn run_ibb_album(args: IbbAlbumArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 用户主页子专辑遍历任务。
-async fn run_ibb_profile(args: IbbProfileArgs) -> Result<()> {
+async fn run_ibb_profile(context: &CliContext, args: IbbProfileArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = optional_login_session(&manager, &args.auth).await?;
-    let report = list_profile_albums(&manager, session.as_ref(), &args.url).await?;
+    let session = optional_login_session(context, &manager, &args.auth).await?;
+    let url = resolve_profile_url(args.url, session.as_ref())?;
+    let report = list_profile_albums(&manager, session.as_ref(), &url).await?;
+
+    if args.output.json {
+        print_json(&report)?;
+        return Ok(());
+    }
+
+    print_profile_report(&report);
+
+    Ok(())
+}
+
+/// 执行当前已登录账号相册列表任务。
+async fn run_mine(context: &CliContext, args: IbbMineArgs) -> Result<()> {
+    let manager = IbbSpiderManager::new();
+    let session = require_login_session(context, &manager, &args.auth).await?;
+    let report = list_profile_albums(&manager, Some(&session), &session.profile.url).await?;
 
     if args.output.json {
         print_json(&report)?;
@@ -73,9 +109,9 @@ async fn run_ibb_profile(args: IbbProfileArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 相册解析任务。
-async fn run_parse_album(args: IbbParseAlbumArgs) -> Result<()> {
+async fn run_parse_album(context: &CliContext, args: IbbParseAlbumArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = optional_login_session(&manager, &args.auth).await?;
+    let session = optional_login_session(context, &manager, &args.auth).await?;
     let detail = parse_album_detail(&manager, session.as_ref(), &args.url).await?;
 
     if args.output.json {
@@ -89,7 +125,7 @@ async fn run_parse_album(args: IbbParseAlbumArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 相册选中图片下载任务。
-async fn run_ibb_images(args: IbbImagesArgs) -> Result<()> {
+async fn run_ibb_images(context: &CliContext, args: IbbImagesArgs) -> Result<()> {
     let IbbImagesArgs {
         url,
         image_ids,
@@ -97,7 +133,7 @@ async fn run_ibb_images(args: IbbImagesArgs) -> Result<()> {
         auth,
     } = args;
     let manager = configured_manager(base_path, format);
-    let session = optional_login_session(&manager, &auth).await?;
+    let session = optional_login_session(context, &manager, &auth).await?;
     let detail = parse_album_detail(&manager, session.as_ref(), &url).await?;
     let report = manager
         .download_album_images(&detail, &image_ids)
@@ -115,7 +151,7 @@ async fn run_ibb_images(args: IbbImagesArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 用户主页批量下载任务。
-async fn run_profile_download(args: IbbProfileDownloadArgs) -> Result<()> {
+async fn run_profile_download(context: &CliContext, args: IbbProfileDownloadArgs) -> Result<()> {
     let IbbProfileDownloadArgs {
         url,
         album_urls,
@@ -123,8 +159,9 @@ async fn run_profile_download(args: IbbProfileDownloadArgs) -> Result<()> {
         auth,
     } = args;
     let manager = configured_manager(base_path, format);
-    let session = optional_login_session(&manager, &auth).await?;
+    let session = optional_login_session(context, &manager, &auth).await?;
     let urls = if album_urls.is_empty() {
+        let url = resolve_profile_url(url, session.as_ref())?;
         list_profile_albums(&manager, session.as_ref(), &url)
             .await?
             .albums
@@ -156,11 +193,15 @@ async fn run_profile_download(args: IbbProfileDownloadArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 登录验证任务。
-async fn run_login(args: IbbLoginArgs) -> Result<()> {
+async fn run_login(context: &CliContext, args: IbbLoginArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let (login_subject, password) = resolve_credentials(&args.auth)?
+        .ok_or_else(|| anyhow::anyhow!("login 命令需要 --login-subject/--password"))?;
+    let session = manager.login(login_subject, password).await?;
+    save_session(&context.session_path, &session)?;
 
     println!("登录成功: {}", session.login_subject);
+    println!("登录态已保存: {}", context.session_path.display());
     println!("跳转地址: {}", session.redirect_url);
     println!("个人空间: {}", session.profile.url);
     println!("JSON 接口: {}", session.profile.json_url);
@@ -169,10 +210,36 @@ async fn run_login(args: IbbLoginArgs) -> Result<()> {
     Ok(())
 }
 
+/// 输出已保存的 CLI 登录态。
+fn run_status(context: &CliContext) -> Result<()> {
+    let Some(session) = load_saved_session(&context.session_path)? else {
+        println!("未保存登录态: {}", context.session_path.display());
+        return Ok(());
+    };
+
+    println!("已保存登录态: {}", context.session_path.display());
+    print_session_summary(&session);
+
+    Ok(())
+}
+
+/// 删除已保存的 CLI 登录态。
+fn run_logout(context: &CliContext) -> Result<()> {
+    match std::fs::remove_file(&context.session_path) {
+        Ok(()) => println!("已删除登录态: {}", context.session_path.display()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("未保存登录态: {}", context.session_path.display());
+        }
+        Err(err) => return Err(err).context("删除登录态文件失败"),
+    }
+
+    Ok(())
+}
+
 /// 执行 ImgBB 创建相册任务。
-async fn run_create_album(args: IbbCreateAlbumArgs) -> Result<()> {
+async fn run_create_album(context: &CliContext, args: IbbCreateAlbumArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let session = require_login_session(context, &manager, &args.auth).await?;
     let report = manager
         .create_album(
             &session,
@@ -191,9 +258,9 @@ async fn run_create_album(args: IbbCreateAlbumArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 上传图片任务。
-async fn run_upload_image(args: IbbUploadImageArgs) -> Result<()> {
+async fn run_upload_image(context: &CliContext, args: IbbUploadImageArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let session = require_login_session(context, &manager, &args.auth).await?;
     let report = manager
         .upload_album_image(&session, args.album_id, args.file_path)
         .await?;
@@ -204,9 +271,9 @@ async fn run_upload_image(args: IbbUploadImageArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 删除图片任务。
-async fn run_delete_image(args: IbbDeleteImageArgs) -> Result<()> {
+async fn run_delete_image(context: &CliContext, args: IbbDeleteImageArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let session = require_login_session(context, &manager, &args.auth).await?;
     let report = manager.delete_image(&session, args.image_id).await?;
 
     print_api_report(&report)?;
@@ -215,9 +282,9 @@ async fn run_delete_image(args: IbbDeleteImageArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 删除相册任务。
-async fn run_delete_album(args: IbbDeleteAlbumArgs) -> Result<()> {
+async fn run_delete_album(context: &CliContext, args: IbbDeleteAlbumArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let session = require_login_session(context, &manager, &args.auth).await?;
     let report = manager.delete_album(&session, args.album_id).await?;
 
     print_api_report(&report)?;
@@ -226,9 +293,12 @@ async fn run_delete_album(args: IbbDeleteAlbumArgs) -> Result<()> {
 }
 
 /// 执行 ImgBB 上传个人空间背景图任务。
-async fn run_upload_profile_background(args: IbbUploadProfileBackgroundArgs) -> Result<()> {
+async fn run_upload_profile_background(
+    context: &CliContext,
+    args: IbbUploadProfileBackgroundArgs,
+) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let session = require_login_session(context, &manager, &args.auth).await?;
     let report = manager
         .upload_profile_background(&session, args.file_path)
         .await?;
@@ -239,9 +309,12 @@ async fn run_upload_profile_background(args: IbbUploadProfileBackgroundArgs) -> 
 }
 
 /// 执行 ImgBB 删除个人空间背景图任务。
-async fn run_delete_profile_background(args: IbbDeleteProfileBackgroundArgs) -> Result<()> {
+async fn run_delete_profile_background(
+    context: &CliContext,
+    args: IbbDeleteProfileBackgroundArgs,
+) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let session = require_login_session(context, &manager, &args.auth).await?;
     let report = manager.delete_profile_background(&session).await?;
 
     print_api_report(&report)?;
@@ -250,9 +323,9 @@ async fn run_delete_profile_background(args: IbbDeleteProfileBackgroundArgs) -> 
 }
 
 /// 执行 ImgBB 编辑图片任务。
-async fn run_edit_image(args: IbbEditImageArgs) -> Result<()> {
+async fn run_edit_image(context: &CliContext, args: IbbEditImageArgs) -> Result<()> {
     let manager = IbbSpiderManager::new();
-    let session = require_login_session(&manager, &args.auth).await?;
+    let session = require_login_session(context, &manager, &args.auth).await?;
     let report = manager
         .edit_image(
             &session,
@@ -279,53 +352,6 @@ fn configured_manager(base_path: std::path::PathBuf, format: Option<String>) -> 
     }
 
     manager
-}
-
-/// 返回可选登录会话。
-async fn optional_login_session(
-    manager: &IbbSpiderManager,
-    auth: &IbbAuthArgs,
-) -> Result<Option<IbbLoginSession>> {
-    let Some((login_subject, password)) = resolve_credentials(auth)? else {
-        return Ok(None);
-    };
-
-    manager.login(login_subject, password).await.map(Some)
-}
-
-/// 返回必须存在的登录会话。
-async fn require_login_session(
-    manager: &IbbSpiderManager,
-    auth: &IbbAuthArgs,
-) -> Result<IbbLoginSession> {
-    let Some((login_subject, password)) = resolve_credentials(auth)? else {
-        bail!(
-            "此命令需要登录凭据，请传入 --login-subject/--password 或设置 IMGBB_LOGIN_SUBJECT/IMGBB_PASSWORD"
-        );
-    };
-
-    manager.login(login_subject, password).await
-}
-
-/// 从 CLI 参数或环境变量读取登录凭据。
-fn resolve_credentials(auth: &IbbAuthArgs) -> Result<Option<(String, String)>> {
-    let login_subject = auth
-        .login_subject
-        .clone()
-        .or_else(|| env::var("IMGBB_LOGIN_SUBJECT").ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    let password = auth
-        .password
-        .clone()
-        .or_else(|| env::var("IMGBB_PASSWORD").ok())
-        .filter(|value| !value.is_empty());
-
-    match (login_subject, password) {
-        (Some(login_subject), Some(password)) => Ok(Some((login_subject, password))),
-        (None, None) => Ok(None),
-        _ => bail!("登录账号和密码必须同时提供"),
-    }
 }
 
 /// 按可选登录态解析相册详情。
@@ -423,14 +449,6 @@ fn privacy_arg_to_model(privacy: IbbPrivacyArg) -> IbbAlbumPrivacy {
 mod tests {
     use super::*;
 
-    /// 验证空登录参数不会触发登录。
-    #[test]
-    fn credentials_are_optional() {
-        let credentials = resolve_credentials(&IbbAuthArgs::default()).unwrap();
-
-        assert!(credentials.is_none());
-    }
-
     /// 验证隐私参数可以转换为库模型。
     #[test]
     fn privacy_arg_converts_to_model() {
@@ -438,5 +456,16 @@ mod tests {
             privacy_arg_to_model(IbbPrivacyArg::Password),
             IbbAlbumPrivacy::Password
         );
+    }
+
+    /// 验证 CLI 模式会把日志级别降到 warn。
+    #[test]
+    fn cli_logging_defaults_to_warn() {
+        let mut config = AppConfig::default();
+        config.logging.level = "info".to_string();
+
+        apply_cli_logging_defaults(&mut config);
+
+        assert_eq!(config.logging.level, "warn");
     }
 }

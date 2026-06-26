@@ -50,6 +50,10 @@ export IMGBB_LOGIN_SUBJECT="you@example.com"
 export IMGBB_PASSWORD="your-password"
 
 cargo run -p imgbb -- login
+cargo run -p imgbb -- status
+cargo run -p imgbb -- mine
+cargo run -p imgbb -- mine --json
+cargo run -p imgbb -- profile
 cargo run -p imgbb -- create-album "Demo Album" --privacy private
 cargo run -p imgbb -- upload-image ABC123 ./photo.jpg
 cargo run -p imgbb -- edit-image IMAGE123 --title "New title" --description "New description"
@@ -57,6 +61,7 @@ cargo run -p imgbb -- delete-image IMAGE123
 cargo run -p imgbb -- delete-album ABC123
 cargo run -p imgbb -- upload-profile-background ./background.jpg
 cargo run -p imgbb -- delete-profile-background
+cargo run -p imgbb -- logout
 ```
 
 也可以在单条命令中传入登录凭据：
@@ -65,7 +70,9 @@ cargo run -p imgbb -- delete-profile-background
 cargo run -p imgbb -- login --login-subject you@example.com --password your-password
 ```
 
-登录凭据只用于当前命令，不会像桌面应用那样写入本地设置库。
+`login` 会把 Cookie 会话保存到当前目录的 `.imgbb-session.json`，不会保存密码。后续 `profile` 可以省略 URL，管理类命令也会自动复用这个登录态。可以通过全局参数 `--session <PATH>` 指定其他会话文件。
+
+`mine` 专门列出当前已登录账号的相册，`my-albums` 和 `mine-albums` 是等价别名。CLI 模式会把日志级别固定为 `warn`，避免普通信息日志混入列表和 JSON 输出。
 
 ## 配置
 

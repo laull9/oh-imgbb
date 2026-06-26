@@ -107,12 +107,21 @@ cargo run -p imgbb -- profile-download -o downloads https://example.imgbb.com/al
 
 ```bash
 cargo run -p imgbb -- login --login-subject you@example.com --password your-password
+cargo run -p imgbb -- status
+cargo run -p imgbb -- mine
+cargo run -p imgbb -- mine --json
+cargo run -p imgbb -- profile
 cargo run -p imgbb -- create-album "Demo Album" --privacy private
 cargo run -p imgbb -- upload-image ABC123 ./photo.jpg
 cargo run -p imgbb -- edit-image IMAGE123 --title "New title"
 cargo run -p imgbb -- delete-image IMAGE123
 cargo run -p imgbb -- delete-album ABC123
+cargo run -p imgbb -- logout
 ```
+
+`login` 会保存 Cookie 会话到默认 `.imgbb-session.json`，不会保存密码。可以用全局参数 `--session <PATH>` 指定其他会话文件。
+
+CLI 模式会把日志级别固定为 `warn`，避免列表和 JSON 输出被普通信息日志打断。
 
 旧版 `ibb-album` 和 `ibb-profile` 子命令仍作为别名保留。
 

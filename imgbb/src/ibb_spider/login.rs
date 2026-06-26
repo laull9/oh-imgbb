@@ -6,6 +6,7 @@ use reqwest::{
     Url,
     header::{CONTENT_TYPE, COOKIE, HeaderMap, LOCATION, ORIGIN, SET_COOKIE},
 };
+use serde::{Deserialize, Serialize};
 
 use super::utils::extract_auth_token;
 
@@ -15,7 +16,7 @@ const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 const IBB_AUTH_PREFIX: &str = "https://ibb.co/auth?login=";
 
 /// IbbCookie 保存一次 ImgBB 登录响应中的 Cookie。
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IbbCookie {
     pub name: String,
     pub value: String,
@@ -29,7 +30,7 @@ pub struct IbbCookie {
 }
 
 /// IbbLoginSession 保存 ImgBB 登录后的内存会话。
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IbbLoginSession {
     pub login_subject: String,
     pub redirect_url: String,
@@ -39,7 +40,7 @@ pub struct IbbLoginSession {
 }
 
 /// IbbAuthenticatedProfile 保存已验证登录态下的用户主页接口信息。
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IbbAuthenticatedProfile {
     pub url: String,
     pub json_url: String,
