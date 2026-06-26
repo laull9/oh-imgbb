@@ -85,6 +85,9 @@ pub enum ImgbbCommand {
 
     /// 编辑图片标题、描述或所属相册。
     EditImage(IbbEditImageArgs),
+
+    /// 使用聚合搜索引擎搜索公开网页。
+    Search(IbbSearchArgs),
 }
 
 /// IbbAuthArgs 保存可选登录凭据参数。
@@ -106,6 +109,9 @@ pub struct IbbOutputArgs {
     #[arg(long)]
     pub json: bool,
 }
+
+/// DEFAULT_SEARCH_DISPLAY_LIMIT 表示 CLI 默认搜索展示条数。
+pub const DEFAULT_SEARCH_DISPLAY_LIMIT: usize = 20;
 
 /// IbbDownloadOptions 保存下载目录和命名参数。
 #[derive(Clone, Debug, Args)]
@@ -341,6 +347,22 @@ pub struct IbbEditImageArgs {
     pub auth: IbbAuthArgs,
 }
 
+/// IbbSearchArgs 保存聚合搜索参数。
+#[derive(Debug, Parser)]
+pub struct IbbSearchArgs {
+    /// query 指定搜索关键词。
+    #[arg(required = true)]
+    pub query: Vec<String>,
+
+    /// limit 指定搜索结果条数。
+    #[arg(short, long, default_value_t = DEFAULT_SEARCH_DISPLAY_LIMIT)]
+    pub limit: usize,
+
+    /// output 保存输出格式。
+    #[command(flatten)]
+    pub output: IbbOutputArgs,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +552,21 @@ mod tests {
                 assert_eq!(args.name, "Demo");
                 assert_eq!(args.privacy, IbbPrivacyArg::Private);
                 assert_eq!(args.auth.login_subject.as_deref(), Some("demo@example.com"));
+            }
+            _ => panic!("解析到了错误的子命令"),
+        }
+    }
+
+    /// 验证 CLI 可以解析聚合搜索子命令。
+    #[test]
+    fn cli_parses_search_command() {
+        let cli = Cli::parse_from(["imgbb", "search", "--json", "rust", "async"]);
+
+        match cli.command {
+            ImgbbCommand::Search(args) => {
+                assert_eq!(args.query, vec!["rust".to_string(), "async".to_string()]);
+                assert_eq!(args.limit, DEFAULT_SEARCH_DISPLAY_LIMIT);
+                assert!(args.output.json);
             }
             _ => panic!("解析到了错误的子命令"),
         }

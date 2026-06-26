@@ -14,6 +14,8 @@ import type {
   ParseTabInput,
   ParseTabRecord,
   ProfileDetail,
+  SearchAlbumsDetail,
+  SearchPing,
 } from "./types";
 
 export async function loginImgbb(loginSubject: string, password: string) {
@@ -69,6 +71,14 @@ export async function parseProfile(url: string, refresh: boolean) {
     url,
     refresh,
   });
+}
+
+export async function pingWebsearch() {
+  return invoke<SearchPing>("ping_websearch");
+}
+
+export async function searchImgbbAlbums(query: string) {
+  return invoke<SearchAlbumsDetail>("search_imgbb_albums", { query });
 }
 
 export async function listParseTabs() {

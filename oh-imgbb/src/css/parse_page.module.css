@@ -34,6 +34,29 @@
   white-space: nowrap;
 }
 
+.parserSection {
+  width: 100%;
+}
+
+.sectionHeader {
+  display: grid;
+  grid-template-columns: auto minmax(48px, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.sectionHeader h3 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 34px;
+}
+
+.sectionDivider {
+  height: 1px;
+  background: var(--border-color);
+}
+
 .toolbar {
   display: grid;
   grid-template-columns: minmax(360px, 1fr) auto auto auto;
@@ -47,6 +70,59 @@
 
 .urlInput {
   min-width: 0;
+}
+
+.webSearchPanel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.webSearchBar {
+  display: grid;
+  grid-template-columns: minmax(280px, 680px) auto;
+  gap: 12px;
+  align-items: center;
+  justify-content: start;
+}
+
+.webSearchInput {
+  width: 100%;
+  min-width: 0;
+}
+
+.pingCard {
+  border-radius: 6px;
+  width: 100%;
+}
+
+.pingCardContent {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.pingCardContent :global(.ant-typography) {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.pingError {
+  display: block !important;
+  margin-top: 4px;
+}
+
+.webSearchHint {
+  display: block;
+  line-height: 22px;
+}
+
+.searchQueryText {
+  display: block;
+  margin-top: 4px;
+  word-break: break-all;
 }
 
 .resultHeader {
@@ -163,6 +239,14 @@
 
 @media (max-width: 980px) {
   .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .webSearchPanel {
+    grid-template-columns: 1fr;
+  }
+
+  .webSearchBar {
     grid-template-columns: 1fr;
   }
 }

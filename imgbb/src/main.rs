@@ -43,6 +43,7 @@ async fn main() -> Result<()> {
             run_delete_profile_background(&context, args).await?
         }
         ImgbbCommand::EditImage(args) => run_edit_image(&context, args).await?,
+        ImgbbCommand::Search(args) => run_search(args).await?,
     }
 
     Ok(())
@@ -344,6 +345,22 @@ async fn run_edit_image(context: &CliContext, args: IbbEditImageArgs) -> Result<
     Ok(())
 }
 
+/// 执行聚合搜索任务。
+async fn run_search(args: IbbSearchArgs) -> Result<()> {
+    let search = AggregateSearch::builder().limit(args.limit).build()?;
+    let query = args.query.join(" ");
+    let response = search.search(&query).await?;
+
+    if args.output.json {
+        print_json(&response)?;
+        return Ok(());
+    }
+
+    print_search_results(&response);
+
+    Ok(())
+}
+
 /// 创建按 CLI 下载参数配置好的管理器。
 fn configured_manager(base_path: std::path::PathBuf, format: Option<String>) -> IbbSpiderManager {
     let mut manager = IbbSpiderManager::new().with_base_path(base_path);
@@ -410,6 +427,22 @@ fn print_album_detail(detail: &IbbAlbumDetail) {
             image.thumbnail_url.as_deref().unwrap_or("-")
         );
         println!("---\t{}", image.image_url);
+    }
+}
+
+/// 输出搜索结果。
+fn print_search_results(response: &SearchResponse) {
+    println!("搜索引擎: {:?}", response.engine);
+    println!("关键词: {}", response.query);
+    println!("结果数: {}", response.results.len());
+    for (index, result) in response.results.iter().enumerate() {
+        println!(
+            "{}. {}\n{}\n{}",
+            index + 1,
+            result.title,
+            result.url,
+            result.snippet
+        );
     }
 }
 

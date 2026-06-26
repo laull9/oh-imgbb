@@ -49,6 +49,22 @@ export interface ProfileBatch {
   finished: boolean;
 }
 
+export interface SearchPing {
+  engine: string;
+  available: boolean;
+  base_url: string;
+  status?: number;
+  latency_ms: number;
+  error?: string;
+  children: SearchPing[];
+}
+
+export interface SearchAlbumsDetail {
+  query: string;
+  search_query: string;
+  albums: ProfileAlbum[];
+}
+
 export interface AppSettings {
   download_dir: string;
   max_concurrent_downloads: number;

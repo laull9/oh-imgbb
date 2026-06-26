@@ -10,6 +10,7 @@ import {
 import {
   App,
   Button,
+  Card,
   Checkbox,
   Empty,
   Image,
@@ -34,9 +35,11 @@ import {
   listParseTabs,
   parseAlbum,
   parseProfile,
+  pingWebsearch,
   removeParseTab,
   saveFavorite,
   saveParseTab,
+  searchImgbbAlbums,
   setActiveParseTab,
 } from "../api/tauri_client";
 import type {
@@ -48,6 +51,7 @@ import type {
   ParseTabRecord,
   ProfileAlbum,
   ProfileBatch,
+  SearchPing,
 } from "../api/types";
 import { ThumbnailGrid } from "../components/thumbnail_grid";
 import styles from "../css/parse_page.module.css";
@@ -90,6 +94,8 @@ interface ProfileTab {
   kind: "profile";
   title: string;
   url: string;
+  source?: "profile" | "search";
+  searchQuery?: string;
   albums: ProfileAlbum[];
   selectedAlbumUrls: string[];
   searchText: string;
@@ -109,8 +115,12 @@ const DEFAULT_DISPLAY_SETTINGS = {
 export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: ParsePageProps) {
   const { message } = App.useApp();
   const [url, setUrl] = useState("");
+  const [webSearchText, setWebSearchText] = useState("");
   const [refresh, setRefresh] = useState(false);
   const [parserLoading, setParserLoading] = useState(false);
+  const [webSearchLoading, setWebSearchLoading] = useState(false);
+  const [webSearchPingLoading, setWebSearchPingLoading] = useState(false);
+  const [webSearchPing, setWebSearchPing] = useState<SearchPing | undefined>(undefined);
   const [activeKey, setActiveKey] = useState(PARSER_TAB_KEY);
   const [tabs, setTabs] = useState<ParseTab[]>([
     { key: PARSER_TAB_KEY, kind: "parser", title: "解析" },
@@ -139,6 +149,10 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
       disposed = true;
     };
   }, [message]);
+
+  useEffect(() => {
+    void refreshWebSearchPing();
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -332,6 +346,48 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
     }
   }
 
+  async function refreshWebSearchPing() {
+    setWebSearchPingLoading(true);
+    try {
+      const ping = await pingWebsearch();
+      setWebSearchPing(ping);
+    } catch (error) {
+      setWebSearchPing({
+        engine: "aggregate",
+        available: false,
+        base_url: "",
+        latency_ms: 0,
+        error: String(error),
+        children: [],
+      });
+    } finally {
+      setWebSearchPingLoading(false);
+    }
+  }
+
+  async function handleWebSearch() {
+    const keyword = webSearchText.trim();
+    if (!keyword) {
+      message.warning("请输入搜索关键词");
+      return;
+    }
+
+    setWebSearchLoading(true);
+    try {
+      const response = await searchImgbbAlbums(keyword);
+      openSearchResultTab(response.query, response.search_query, response.albums);
+      if (response.albums.length === 0) {
+        message.warning("没有提取到 ImgBB 相册地址");
+      } else {
+        message.success(`已找到 ${response.albums.length} 个相册`);
+      }
+    } catch (error) {
+      message.error(String(error));
+    } finally {
+      setWebSearchLoading(false);
+    }
+  }
+
   async function handleImportClipboard() {
     if (!navigator.clipboard?.readText) {
       message.error("当前环境不支持读取剪切板");
@@ -446,6 +502,50 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
         },
       ];
     });
+  }
+
+  function openSearchResultTab(query: string, searchQuery: string, albums: ProfileAlbum[]) {
+    const key = buildSearchTabKey(query);
+    const title = `搜索：${query}`;
+    const tabUrl = `websearch://imgbb-albums?query=${encodeURIComponent(query)}`;
+
+    setTabs((current) => {
+      if (current.some((tab) => tab.key === key)) {
+        return current.map((tab) =>
+          tab.kind === "profile" && tab.key === key
+            ? {
+                ...tab,
+                title,
+                url: tabUrl,
+                source: "search",
+                searchQuery,
+                albums,
+                selectedAlbumUrls: [],
+                currentPage: 1,
+                loading: false,
+              }
+            : tab,
+        );
+      }
+
+      return [
+        ...current,
+        {
+          key,
+          kind: "profile",
+          title,
+          url: tabUrl,
+          source: "search",
+          searchQuery,
+          albums,
+          selectedAlbumUrls: [],
+          searchText: "",
+          currentPage: 1,
+          loading: false,
+        },
+      ];
+    });
+    activateTab(key);
   }
 
   function markTabFailed(key: string) {
@@ -717,10 +817,17 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
             ? renderParserTab(
                 url,
                 setUrl,
+                webSearchText,
+                setWebSearchText,
                 refresh,
                 setRefresh,
                 parserLoading,
+                webSearchLoading,
+                webSearchPingLoading,
+                webSearchPing,
                 handleParse,
+                handleWebSearch,
+                refreshWebSearchPing,
                 handleImportClipboard,
               )
             : tab.kind === "album"
@@ -748,7 +855,17 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
                   displaySettings,
                 ),
       })),
-    [tabs, url, refresh, parserLoading, displaySettings],
+    [
+      tabs,
+      url,
+      webSearchText,
+      refresh,
+      parserLoading,
+      webSearchLoading,
+      webSearchPingLoading,
+      webSearchPing,
+      displaySettings,
+    ],
   );
 
   return (
@@ -800,34 +917,104 @@ function recordToTab(record: ParseTabRecord): ParseTab {
 function renderParserTab(
   url: string,
   setUrl: (value: string) => void,
+  webSearchText: string,
+  setWebSearchText: (value: string) => void,
   refresh: boolean,
   setRefresh: (value: boolean) => void,
   parserLoading: boolean,
+  webSearchLoading: boolean,
+  webSearchPingLoading: boolean,
+  webSearchPing: SearchPing | undefined,
   handleParse: () => void,
+  handleWebSearch: () => void,
+  refreshWebSearchPing: () => void,
   importClipboard: () => void,
 ) {
+  const availableChildren = webSearchPing?.children.filter((item) => item.available) ?? [];
+  const pingStatusColor = webSearchPing?.available ? "success" : "error";
+  const pingStatusText = webSearchPing
+    ? webSearchPing.available
+      ? `可用 · ${availableChildren.length || 1} 个入口`
+      : "不可用"
+    : "未检测";
+
   return (
-    <Space direction="vertical" size={16} className={styles.pageStack}>
-      <div className={styles.toolbar}>
-        <Input
-          value={url}
-          onChange={(event) => setUrl(event.target.value)}
-          onPressEnter={handleParse}
-          placeholder="粘贴 ImgBB 相册或个人空间地址"
-          prefix={<SearchOutlined />}
-          className={styles.urlInput}
-        />
-        <Button icon={<SnippetsOutlined />} onClick={importClipboard}>
-          从剪切板导入
-        </Button>
-        <Space>
-          <Typography.Text>刷新</Typography.Text>
-          <Switch checked={refresh} onChange={setRefresh} />
-        </Space>
-        <Button type="primary" icon={<ReloadOutlined />} loading={parserLoading} onClick={handleParse}>
-          解析
-        </Button>
-      </div>
+    <Space direction="vertical" size={22} className={styles.pageStack}>
+      <section className={styles.parserSection}>
+        <div className={styles.sectionHeader}>
+          <Typography.Title level={3}>地址解析</Typography.Title>
+          <div className={styles.sectionDivider} />
+        </div>
+        <div className={styles.toolbar}>
+          <Input
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            onPressEnter={handleParse}
+            placeholder="粘贴 ImgBB 相册或个人空间地址"
+            prefix={<SearchOutlined />}
+            className={styles.urlInput}
+          />
+          <Button icon={<SnippetsOutlined />} onClick={importClipboard}>
+            从剪切板导入
+          </Button>
+          <Space>
+            <Typography.Text>刷新</Typography.Text>
+            <Switch checked={refresh} onChange={setRefresh} />
+          </Space>
+          <Button type="primary" icon={<ReloadOutlined />} loading={parserLoading} onClick={handleParse}>
+            解析
+          </Button>
+        </div>
+      </section>
+      <section className={styles.parserSection}>
+        <div className={styles.sectionHeader}>
+          <Typography.Title level={3}>网络搜索</Typography.Title>
+          <div className={styles.sectionDivider} />
+        </div>
+        <div className={styles.webSearchPanel}>
+          <div className={styles.webSearchBar}>
+            <Input
+              value={webSearchText}
+              onChange={(event) => setWebSearchText(event.target.value)}
+              onPressEnter={handleWebSearch}
+              placeholder="网络搜索公开相册"
+              prefix={<SearchOutlined />}
+              className={styles.webSearchInput}
+            />
+            <Button type="primary" icon={<SearchOutlined />} loading={webSearchLoading} onClick={handleWebSearch}>
+              搜索
+            </Button>
+          </div>
+          <Card size="small" className={styles.pingCard}>
+            <div className={styles.pingCardContent}>
+              <div>
+                <Typography.Text strong>网络搜索检测</Typography.Text>
+                <div>
+                  <Tag color={pingStatusColor}>{pingStatusText}</Tag>
+                  {webSearchPing?.base_url && (
+                    <Typography.Text type="secondary">{webSearchPing.base_url}</Typography.Text>
+                  )}
+                </div>
+                {webSearchPing?.error && (
+                  <Typography.Text type="secondary" className={styles.pingError}>
+                    {webSearchPing.error}
+                  </Typography.Text>
+                )}
+              </div>
+              <Button
+                icon={<ReloadOutlined />}
+                loading={webSearchPingLoading}
+                onClick={refreshWebSearchPing}
+              >
+                检测
+              </Button>
+            </div>
+          </Card>
+          <Typography.Text type="secondary" className={styles.webSearchHint}>
+            如果不能进行搜索，可能是你的国家对于搜索引擎有一定限制，可以尝试代理或者加速器。
+          </Typography.Text>
+        </div>
+      </section>
       <Empty description="解析结果会在新标签页中打开" />
     </Space>
   );
@@ -943,6 +1130,7 @@ function renderProfileTab(
   displaySettings: Pick<AppSettings, "pagination_enabled" | "profile_page_size">,
 ) {
   const filteredAlbums = filterProfileAlbums(tab.albums, tab.searchText);
+  const isSearchResult = tab.source === "search";
   const profilePage = clampPage(
     tab.currentPage,
     filteredAlbums.length,
@@ -959,12 +1147,17 @@ function renderProfileTab(
     <Space direction="vertical" size={12} className={styles.pageStack}>
       <div className={styles.resultHeader}>
         <div className={styles.resultTitle}>
-          <Typography.Title level={4}>{profileTitle(tab.url)}</Typography.Title>
+          <Typography.Title level={4}>{tab.title || profileTitle(tab.url)}</Typography.Title>
           <Typography.Text type="secondary">
             {tab.loading
               ? "解析中"
               : `${filteredAlbums.length}/${tab.albums.length} · 已选择 ${tab.selectedAlbumUrls.length} 个`}
           </Typography.Text>
+          {isSearchResult && tab.searchQuery && (
+            <Typography.Text type="secondary" className={styles.searchQueryText}>
+              {tab.searchQuery}
+            </Typography.Text>
+          )}
         </div>
         <Space className={styles.resultActions}>
           <Input
@@ -988,9 +1181,11 @@ function renderProfileTab(
           >
             全选
           </Checkbox>
-          <Button icon={<HeartOutlined />} onClick={() => favoriteProfile(tab)}>
-            收藏空间
-          </Button>
+          {!isSearchResult && (
+            <Button icon={<HeartOutlined />} onClick={() => favoriteProfile(tab)}>
+              收藏空间
+            </Button>
+          )}
           <Button
             icon={<HeartOutlined />}
             disabled={tab.selectedAlbumUrls.length === 0}
@@ -1011,7 +1206,11 @@ function renderProfileTab(
       <List
         className={styles.profileList}
         dataSource={visibleAlbums}
-        locale={{ emptyText: <Empty description={tab.loading ? "正在解析个人空间" : "暂无相册"} /> }}
+        locale={{
+          emptyText: (
+            <Empty description={tab.loading ? "正在解析个人空间" : isSearchResult ? "暂无搜索结果" : "暂无相册"} />
+          ),
+        }}
         renderItem={(item) => {
           const checked = tab.selectedAlbumUrls.includes(item.url);
 
@@ -1099,7 +1298,7 @@ function tabLabel(tab: ParseTab) {
       <Tooltip title={tab.title}>
         <span className={styles.tabTitleText}>{label}</span>
       </Tooltip>
-      {tab.kind === "profile" && <Tag>空间</Tag>}
+      {tab.kind === "profile" && <Tag>{tab.source === "search" ? "搜索" : "空间"}</Tag>}
       {tab.loading && <Tag color="processing">加载</Tag>}
     </Space>
   );
@@ -1162,6 +1361,10 @@ function removeSelection(current: string[], removed: string[]) {
 
 function buildTabKey(kind: ParseKind, inputUrl: string) {
   return `${kind}:${normalizeComparableUrl(inputUrl)}`;
+}
+
+function buildSearchTabKey(query: string) {
+  return `search:${normalizeSearchText(query)}`;
 }
 
 // detectParseKind 根据 URL 形态自动判断解析目标类型。
