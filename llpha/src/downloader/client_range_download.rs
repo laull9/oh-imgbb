@@ -2,6 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::{
     Client, Proxy, StatusCode,
     header::{ACCEPT_ENCODING, HeaderValue, RANGE},
+    redirect::Policy,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -296,17 +297,33 @@ async fn emit_range_job_progress(
 /// 根据分片任务的代理池选择 reqwest 客户端。
 fn client_for_range_job(job: &RangeDownloadJob) -> Result<Client> {
     let Some(proxy_pool) = &job.proxy_pool else {
-        return Ok(job.client.clone());
+        if job.request.options.follow_redirects {
+            return Ok(job.client.clone());
+        }
+
+        return Client::builder()
+            .redirect(Policy::none())
+            .build()
+            .map_err(Into::into);
     };
 
     let Some(proxy_url) = proxy_pool.next_proxy()? else {
-        return Ok(job.client.clone());
+        if job.request.options.follow_redirects {
+            return Ok(job.client.clone());
+        }
+
+        return Client::builder()
+            .redirect(Policy::none())
+            .build()
+            .map_err(Into::into);
     };
 
-    Client::builder()
-        .proxy(Proxy::all(proxy_url)?)
-        .build()
-        .map_err(Into::into)
+    let mut builder = Client::builder().proxy(Proxy::all(proxy_url)?);
+    if !job.request.options.follow_redirects {
+        builder = builder.redirect(Policy::none());
+    }
+
+    builder.build().map_err(Into::into)
 }
 
 /// 合并所有分片文件到最终目标路径。

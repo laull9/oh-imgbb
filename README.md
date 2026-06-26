@@ -32,7 +32,7 @@ Llpha 是一个面向轻量级网页抓取和 ImgBB 相册工作流的 Rust work
 ### Rust crates
 
 - `llpha` 提供请求与下载、重试、可配置日志、HTML 提取、任务调度和工作流基础能力。
-- `imgbb` 基于 `llpha` 实现 ImgBB 相册解析、个人空间相册遍历，以及 CLI/library 下载能力。
+- `imgbb` 基于 `llpha` 实现 ImgBB 相册解析、个人空间相册遍历、下载和已登录账号管理能力，并提供独立 CLI。
 
 ## 环境要求
 
@@ -74,22 +74,44 @@ cargo test --workspace
 
 ## CLI 用法
 
+`imgbb` CLI 覆盖桌面端的核心站点能力：公开解析/下载、可选登录态解析、选中图片下载、个人空间批量下载，以及需要登录的账号管理操作。桌面端的本地收藏、SQLite 缓存和标签页恢复属于 GUI 本地状态，不在 CLI 中持久化。
+
+解析 ImgBB 相册：
+
+```bash
+cargo run -p imgbb -- parse-album https://ibb.co/album/ABC123
+cargo run -p imgbb -- parse-album --json https://ibb.co/album/ABC123
+```
+
 下载 ImgBB 相册：
 
 ```bash
 cargo run -p imgbb -- album https://ibb.co/album/ABC123
 ```
 
-下载相册到指定目录：
+下载相册到指定目录，或只下载解析结果里的指定图片：
 
 ```bash
 cargo run -p imgbb -- album -o downloads https://ibb.co/album/ABC123
+cargo run -p imgbb -- images https://ibb.co/album/ABC123 --image-id https://i.ibb.co/demo/a.jpg
 ```
 
-遍历并下载 ImgBB 个人空间中的相册：
+遍历 ImgBB 个人空间，或批量下载空间中的相册：
 
 ```bash
 cargo run -p imgbb -- profile https://example.imgbb.com/albums?list=albums
+cargo run -p imgbb -- profile-download -o downloads https://example.imgbb.com/albums?list=albums
+```
+
+需要登录的命令可以使用 `--login-subject`/`--password`，或设置 `IMGBB_LOGIN_SUBJECT` 与 `IMGBB_PASSWORD`：
+
+```bash
+cargo run -p imgbb -- login --login-subject you@example.com --password your-password
+cargo run -p imgbb -- create-album "Demo Album" --privacy private
+cargo run -p imgbb -- upload-image ABC123 ./photo.jpg
+cargo run -p imgbb -- edit-image IMAGE123 --title "New title"
+cargo run -p imgbb -- delete-image IMAGE123
+cargo run -p imgbb -- delete-album ABC123
 ```
 
 旧版 `ibb-album` 和 `ibb-profile` 子命令仍作为别名保留。

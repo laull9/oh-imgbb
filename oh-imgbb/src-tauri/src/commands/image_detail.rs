@@ -31,37 +31,41 @@ pub async fn download_detail_image(
     state: State<'_, AppState>,
     url: String,
 ) -> Result<DetailImageResponse, String> {
-    command_result(async {
-        let path = build_detail_image_path(&state.detail_image_dir, &url)?;
-        state
-            .thumbnail_client
-            .download_file(url, &path)
-            .await
-            .context("详情图下载失败")?;
+    command_result(
+        async {
+            let path = build_detail_image_path(&state.detail_image_dir, &url)?;
+            state
+                .thumbnail_client
+                .download_file(url, &path)
+                .await
+                .context("详情图下载失败")?;
 
-        Ok(DetailImageResponse {
-            local_path: path.to_string_lossy().to_string(),
-        })
-    }
-    .await)
+            Ok(DetailImageResponse {
+                local_path: path.to_string_lossy().to_string(),
+            })
+        }
+        .await,
+    )
 }
 
 /// 删除详情图临时文件，失败时保持幂等。
 #[tauri::command]
 pub async fn remove_detail_image(state: State<'_, AppState>, path: String) -> Result<(), String> {
-    command_result(async {
-        let path_buf = PathBuf::from(&path);
-        if !path_buf.starts_with(&state.detail_image_dir) {
-            anyhow::bail!("详情图临时文件路径不在允许目录内");
-        }
+    command_result(
+        async {
+            let path_buf = PathBuf::from(&path);
+            if !path_buf.starts_with(&state.detail_image_dir) {
+                anyhow::bail!("详情图临时文件路径不在允许目录内");
+            }
 
-        match tokio::fs::remove_file(&path).await {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err).with_context(|| format!("删除详情图临时文件失败: {path}")),
+            match tokio::fs::remove_file(&path).await {
+                Ok(()) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(err) => Err(err).with_context(|| format!("删除详情图临时文件失败: {path}")),
+            }
         }
-    }
-    .await)
+        .await,
+    )
 }
 
 /// 构造详情图临时文件路径。
@@ -113,7 +117,10 @@ mod tests {
         let first = build_detail_image_path(&dir, "https://i.ibb.co/demo/photo.png?x=1").unwrap();
         let second = build_detail_image_path(&dir, "https://i.ibb.co/demo/photo.png?x=1").unwrap();
 
-        assert_eq!(first.extension().and_then(|value| value.to_str()), Some("png"));
+        assert_eq!(
+            first.extension().and_then(|value| value.to_str()),
+            Some("png")
+        );
         assert_ne!(first, second);
     }
 }

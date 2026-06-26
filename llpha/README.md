@@ -13,6 +13,16 @@
 
 ImgBB 等站点级实现已经移入 workspace 的 `../imgbb/` crate，`llpha` 只保留可复用框架代码。
 
+## CLI 工具
+
+ImgBB 站点工具位于 workspace 的 `imgbb` crate，可以解析/下载相册、遍历或批量下载个人空间相册，并提供登录后的相册与图片管理命令：
+
+```bash
+cargo run -p imgbb -- --help
+cargo run -p imgbb -- parse-album https://ibb.co/album/ABC123
+cargo run -p imgbb -- profile-download -o downloads https://example.imgbb.com/albums?list=albums
+```
+
 ## 核心文档
 
 - [任务引擎文档](./docs/engine.md)

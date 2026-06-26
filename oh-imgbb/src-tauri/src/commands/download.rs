@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Result};
 use imgbb::ibb_spider::{IbbAlbumDetail, IbbDownloadProgressEvent, IbbSpiderManager};
+use llpha::{LlphaClient, RetryPolicy};
 use tauri::{Emitter, State, Window};
 
 use crate::app_state::AppState;
@@ -19,7 +20,13 @@ async fn configured_manager(state: &AppState) -> Result<IbbSpiderManager> {
     let settings = repository::load_settings(&state.db_pool)
         .await?
         .unwrap_or_else(|| AppSettings::with_download_dir(&state.default_download_dir));
-    let mut manager = IbbSpiderManager::new().with_base_path(&settings.download_dir);
+    let client = LlphaClient::builder()
+        .max_concurrent_requests(settings.max_concurrent_downloads)
+        .retry_policy(RetryPolicy::new(settings.max_retries))
+        .build()?;
+    let mut manager = IbbSpiderManager::new()
+        .with_client(std::sync::Arc::new(client))
+        .with_base_path(&settings.download_dir);
 
     if let Some(pattern) = settings.file_name_pattern.filter(|value| !value.is_empty()) {
         manager = manager.with_file_name_pattern(pattern);

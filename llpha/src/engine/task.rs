@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Write;
 
 use crate::downloader::request::{HttpMethod, RequestOptions};
 
@@ -148,7 +149,27 @@ impl Task {
 
     /// 返回用于去重的稳定指纹。
     pub fn fingerprint(&self) -> String {
-        format!("{:?}:{}:{}", self.kind, self.method_key(), self.target)
+        let mut fingerprint = format!(
+            "{:?}:{}:{}:body={}:redirects={}",
+            self.kind,
+            self.method_key(),
+            self.target,
+            self.body.as_deref().unwrap_or_default(),
+            self.options.follow_redirects,
+        );
+
+        let mut headers = self.options.headers.iter().collect::<Vec<_>>();
+        headers
+            .sort_by(|(left_name, _), (right_name, _)| left_name.as_str().cmp(right_name.as_str()));
+        for (name, value) in headers {
+            let value = value
+                .to_str()
+                .map(str::to_string)
+                .unwrap_or_else(|_| format!("{value:?}"));
+            let _ = write!(fingerprint, ":header:{}={}", name.as_str(), value);
+        }
+
+        fingerprint
     }
 
     /// 返回 HTTP 方法的稳定文本表示。
@@ -197,7 +218,19 @@ mod tests {
     fn task_fingerprint_is_stable() {
         let task = Task::fetch("https://example.com");
 
-        assert_eq!(task.fingerprint(), "Fetch:GET:https://example.com");
+        assert_eq!(
+            task.fingerprint(),
+            "Fetch:GET:https://example.com:body=:redirects=true"
+        );
+    }
+
+    /// 验证不同正文的任务不会被误判为重复。
+    #[test]
+    fn task_fingerprint_includes_body() {
+        let first = Task::post("https://example.com/api", "{\"page\":1}");
+        let second = Task::post("https://example.com/api", "{\"page\":2}");
+
+        assert_ne!(first.fingerprint(), second.fingerprint());
     }
 
     /// 验证字符串可以直接转换为抓取任务。

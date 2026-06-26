@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -167,8 +167,7 @@ pub(super) async fn download_album_with_progress(
     let album = IbbAlbumUrl::parse(input_url)?;
     info!(url = %album.normalized_url, "开始执行 ImgBB 相册任务");
 
-    let parsed_album = fetch_album_detail(&client, &album, None).await?;
-    let album_json = fetch_album_json(&client, &album, None).await?;
+    let (parsed_album, album_json) = fetch_album_detail_and_json(&client, &album, None).await?;
     let download_summary = download_album_contents(
         client,
         &base_path,
@@ -261,18 +260,30 @@ async fn fetch_album_detail(
     album: &IbbAlbumUrl,
     session: Option<&IbbLoginSession>,
 ) -> Result<IbbAlbumDetail> {
+    Ok(fetch_album_detail_and_json(client, album, session).await?.0)
+}
+
+/// 抓取相册页面和 JSON 并返回详情与原始 JSON。
+async fn fetch_album_detail_and_json(
+    client: &LlphaClient,
+    album: &IbbAlbumUrl,
+    session: Option<&IbbLoginSession>,
+) -> Result<(IbbAlbumDetail, Value)> {
     let album_html = fetch_album_html(client, album, session).await?;
     let author_url = extract_album_author_url(&album_html, &album.normalized_url)?;
     let album_json = fetch_album_json(client, album, session).await?;
     let title = required_json_string(&album_json, "/album/name")?.to_string();
     let images = parse_album_images(&album_json)?;
 
-    Ok(IbbAlbumDetail {
-        url: album.normalized_url.clone(),
-        title,
-        author_url,
-        images,
-    })
+    Ok((
+        IbbAlbumDetail {
+            url: album.normalized_url.clone(),
+            title,
+            author_url,
+            images,
+        },
+        album_json,
+    ))
 }
 
 /// 抓取相册主页面用于读取相册附加信息。
@@ -435,7 +446,7 @@ fn build_album_json_body(album: &IbbAlbumUrl, auth_token: &str) -> Result<String
 /// 下载相册 JSON 中声明的所有文件。
 async fn download_album_contents(
     client: Arc<LlphaClient>,
-    base_path: &PathBuf,
+    base_path: &Path,
     album_json: &Value,
     file_name_mode: &AlbumFileNameMode,
     album_url: &str,
@@ -526,7 +537,7 @@ async fn emit_album_download_progress(
 
 /// 从已解析相册构造选中图片下载计划。
 fn build_selected_download_plan(
-    base_path: &PathBuf,
+    base_path: &Path,
     detail: &IbbAlbumDetail,
     image_ids: &[String],
     file_name_mode: &AlbumFileNameMode,
@@ -563,7 +574,7 @@ fn build_selected_download_plan(
 
 /// 从相册 JSON 构造下载计划。
 fn build_download_plan(
-    base_path: &PathBuf,
+    base_path: &Path,
     album_json: &Value,
     file_name_mode: &AlbumFileNameMode,
 ) -> Result<AlbumDownloadPlan> {

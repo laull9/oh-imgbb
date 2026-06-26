@@ -1,6 +1,6 @@
 //! app_state 模块保存 Tauri 后端共享状态。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -74,7 +74,7 @@ fn resolve_app_dir() -> Result<PathBuf> {
 }
 
 /// 解析系统下载目录作为默认下载目录。
-fn resolve_default_download_dir(app: &AppHandle, fallback_dir: &PathBuf) -> Result<PathBuf> {
+fn resolve_default_download_dir(app: &AppHandle, fallback_dir: &Path) -> Result<PathBuf> {
     match app.path().download_dir() {
         Ok(download_dir) => Ok(download_dir),
         Err(_) => Ok(fallback_dir.to_path_buf()),

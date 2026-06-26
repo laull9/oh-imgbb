@@ -45,6 +45,12 @@ impl IbbSpiderManager {
         }
     }
 
+    /// 使用指定客户端创建 ImgBB 任务管理器。
+    pub fn with_client(mut self, client: Arc<LlphaClient>) -> Self {
+        self.client = client;
+        self
+    }
+
     /// 设置下载基础目录。
     pub fn with_base_path(mut self, base_path: impl Into<PathBuf>) -> Self {
         self.options.base_path = base_path.into();
@@ -308,10 +314,7 @@ impl IbbSpiderManager {
         let mut page = 2usize;
         let mut seek = extract_next_seek(&initial_html);
 
-        loop {
-            let Some(current_seek) = seek.take().filter(|value| !value.is_empty()) else {
-                break;
-            };
+        while let Some(current_seek) = seek.take().filter(|value| !value.is_empty()) {
             let response_json = self
                 .fetch_profile_albums_json(&profile, session, &auth_token, page, &current_seek)
                 .await?;
@@ -441,5 +444,12 @@ impl Default for IbbSpiderOptions {
             base_path: PathBuf::from("."),
             file_name_mode: AlbumFileNameMode::default(),
         }
+    }
+}
+
+impl Default for IbbSpiderManager {
+    /// 创建默认 ImgBB 任务管理器。
+    fn default() -> Self {
+        Self::new()
     }
 }

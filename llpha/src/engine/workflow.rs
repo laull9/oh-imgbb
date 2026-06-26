@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use tokio::task::JoinSet;
 
 use crate::downloader::client::LlphaClient;
 use crate::downloader::request::FetchResponse;
@@ -139,7 +140,7 @@ impl WorkflowEngineBuilder {
             generator: self.generator,
             scheduler: self.scheduler,
             graph: TaskGraph::new(),
-            plugin_registry: self.plugin_registry,
+            plugin_registry: Arc::new(self.plugin_registry),
             plugin_context: PluginContext {
                 name: "llpha-engine".to_string(),
             },
@@ -155,7 +156,7 @@ pub struct WorkflowEngine {
     generator: Arc<dyn ActionGenerator>,
     scheduler: InMemoryScheduler,
     graph: TaskGraph,
-    plugin_registry: PluginRegistry,
+    plugin_registry: Arc<PluginRegistry>,
     plugin_context: PluginContext,
     max_steps: usize,
 }
@@ -192,20 +193,52 @@ impl WorkflowEngine {
         }
 
         let mut report = EngineReport::default();
+        let mut running_tasks = JoinSet::new();
         while report.processed_tasks < self.max_steps {
-            let Some(task) = self.scheduler.next() else {
+            while report.processed_tasks + running_tasks.len() < self.max_steps {
+                let Some(task) = self.scheduler.next() else {
+                    break;
+                };
+
+                self.graph.set_status(task.id, TaskStatus::Running);
+                let fetcher = self.fetcher.clone();
+                let parser = self.parser.clone();
+                let generator = self.generator.clone();
+                let plugin_registry = self.plugin_registry.clone();
+                let plugin_context = self.plugin_context.clone();
+
+                running_tasks.spawn(async move {
+                    let actions = execute_task(
+                        fetcher,
+                        parser,
+                        generator,
+                        plugin_registry,
+                        plugin_context,
+                        task.clone(),
+                    )
+                    .await;
+
+                    (task, actions)
+                });
+            }
+
+            let Some(result) = running_tasks.join_next().await else {
                 break;
             };
 
-            self.graph.set_status(task.id, TaskStatus::Running);
-            match self.execute_task(task.clone()).await {
+            let (task, result) = result.context("工作流任务执行线程失败")?;
+            match result {
                 Ok(actions) => {
+                    self.scheduler.mark_succeeded(task.id);
+                    self.graph.set_status(task.id, TaskStatus::Succeeded);
                     report.processed_tasks = report.processed_tasks.saturating_add(1);
                     report.generated_tasks = report
                         .generated_tasks
                         .saturating_add(self.apply_actions(&task, &actions)?);
                 }
                 Err(_) => {
+                    self.scheduler.mark_failed(task.id);
+                    self.graph.set_status(task.id, TaskStatus::Failed);
                     report.processed_tasks = report.processed_tasks.saturating_add(1);
                     report.failed_tasks = report.failed_tasks.saturating_add(1);
                 }
@@ -227,65 +260,6 @@ impl WorkflowEngine {
         let report = engine.run([seed.into()]).await?;
 
         Ok((report, engine.graph))
-    }
-
-    /// 执行一个任务并生成行为。
-    async fn execute_task(&mut self, task: Task) -> Result<Vec<Action>> {
-        let response = self.fetcher.fetch(&task).await;
-        let response = match response {
-            Ok(response) => response,
-            Err(err) => {
-                self.scheduler.mark_failed(task.id);
-                self.graph.set_status(task.id, TaskStatus::Failed);
-                return Err(err);
-            }
-        };
-
-        let mut page = match self.parser.parse(&task, response) {
-            Ok(page) => page,
-            Err(err) => {
-                self.scheduler.mark_failed(task.id);
-                self.graph.set_status(task.id, TaskStatus::Failed);
-                return Err(err);
-            }
-        };
-        page = match self
-            .plugin_registry
-            .apply_after_page(&self.plugin_context, &task, page)
-        {
-            Ok(page) => page,
-            Err(err) => {
-                self.scheduler.mark_failed(task.id);
-                self.graph.set_status(task.id, TaskStatus::Failed);
-                return Err(err);
-            }
-        };
-        let mut actions = match self.generator.generate(&task, &page) {
-            Ok(actions) => actions,
-            Err(err) => {
-                self.scheduler.mark_failed(task.id);
-                self.graph.set_status(task.id, TaskStatus::Failed);
-                return Err(err);
-            }
-        };
-        actions = match self.plugin_registry.apply_after_actions(
-            &self.plugin_context,
-            &task,
-            &page,
-            actions,
-        ) {
-            Ok(actions) => actions,
-            Err(err) => {
-                self.scheduler.mark_failed(task.id);
-                self.graph.set_status(task.id, TaskStatus::Failed);
-                return Err(err);
-            }
-        };
-
-        self.scheduler.mark_succeeded(task.id);
-        self.graph.set_status(task.id, TaskStatus::Succeeded);
-
-        Ok(actions)
     }
 
     /// 将行为转换为任务并回流调度器。
@@ -328,12 +302,31 @@ impl WorkflowEngine {
     }
 }
 
+/// 执行一个任务并生成行为。
+async fn execute_task(
+    fetcher: Arc<dyn Fetcher>,
+    parser: Arc<dyn Parser>,
+    generator: Arc<dyn ActionGenerator>,
+    plugin_registry: Arc<PluginRegistry>,
+    plugin_context: PluginContext,
+    task: Task,
+) -> Result<Vec<Action>> {
+    let response = fetcher.fetch(&task).await?;
+    let mut page = parser.parse(&task, response)?;
+    page = plugin_registry.apply_after_page(&plugin_context, &task, page)?;
+    let actions = generator.generate(&task, &page)?;
+
+    plugin_registry.apply_after_actions(&plugin_context, &task, &page, actions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
     use reqwest::StatusCode;
     use reqwest::header::HeaderMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::time::{Duration, sleep};
 
     use crate::downloader::request::FetchResponse;
 
@@ -405,5 +398,50 @@ mod tests {
         assert_eq!(report.generated_tasks, 1);
         assert_eq!(engine.graph().node_count(), 2);
         assert_eq!(engine.graph().edge_count(), 1);
+    }
+
+    /// 验证工作流引擎会按配置并发执行独立任务。
+    #[tokio::test]
+    async fn workflow_engine_runs_tasks_concurrently() {
+        let running = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::new(AtomicUsize::new(0));
+        let running_for_fetcher = running.clone();
+        let observed_for_fetcher = observed.clone();
+        let mut engine = WorkflowEngine::builder()
+            .fetcher_fn(move |task| {
+                let running = running_for_fetcher.clone();
+                let observed = observed_for_fetcher.clone();
+                async move {
+                    let current = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    observed.fetch_max(current, Ordering::SeqCst);
+                    sleep(Duration::from_millis(10)).await;
+                    running.fetch_sub(1, Ordering::SeqCst);
+
+                    Ok(FetchResponse {
+                        url: task.target,
+                        status: StatusCode::OK,
+                        headers: HeaderMap::new(),
+                        body: "<html></html>".to_string(),
+                    })
+                }
+            })
+            .generator(|_task: &Task, _page: &crate::engine::page::Page| Ok(vec![]))
+            .max_concurrency(2)
+            .max_steps(4)
+            .build()
+            .unwrap();
+
+        let report = engine
+            .run([
+                "https://example.com/a",
+                "https://example.com/b",
+                "https://example.com/c",
+                "https://example.com/d",
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(report.processed_tasks, 4);
+        assert_eq!(observed.load(Ordering::SeqCst), 2);
     }
 }
