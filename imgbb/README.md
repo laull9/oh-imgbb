@@ -11,9 +11,9 @@
 ## 快速使用
 
 ```bash
-cargo run -p imgbb -- album https://ibb.co/album/ABC123
-cargo run -p imgbb -- album -o downloads https://ibb.co/album/ABC123
-cargo run -p imgbb -- profile https://beautif11.imgbb.com/albums?list=albums
+imgbb album https://ibb.co/album/ABC123
+imgbb album -o downloads https://ibb.co/album/ABC123
+imgbb profile https://beautif11.imgbb.com/albums?list=albums
 ```
 
 旧版子命令 `ibb-album` 和 `ibb-profile` 仍作为别名保留。
@@ -23,24 +23,24 @@ cargo run -p imgbb -- profile https://beautif11.imgbb.com/albums?list=albums
 解析相册，输出可用于选中下载的图片 ID：
 
 ```bash
-cargo run -p imgbb -- parse-album https://ibb.co/album/ABC123
-cargo run -p imgbb -- parse-album --json https://ibb.co/album/ABC123
+imgbb parse-album https://ibb.co/album/ABC123
+imgbb parse-album --json https://ibb.co/album/ABC123
 ```
 
 下载整本相册或指定图片：
 
 ```bash
-cargo run -p imgbb -- album -o downloads --format "{album}_{count}_{name}" https://ibb.co/album/ABC123
-cargo run -p imgbb -- images https://ibb.co/album/ABC123 --image-id https://i.ibb.co/demo/a.jpg
+imgbb album -o downloads --format "{album}_{count}_{name}" https://ibb.co/album/ABC123
+imgbb images https://ibb.co/album/ABC123 --image-id https://i.ibb.co/demo/a.jpg
 ```
 
 遍历个人空间，或下载个人空间中的全部/指定相册：
 
 ```bash
-cargo run -p imgbb -- profile https://beautif11.imgbb.com/albums?list=albums
-cargo run -p imgbb -- profile --json https://beautif11.imgbb.com/albums?list=albums
-cargo run -p imgbb -- profile-download -o downloads https://beautif11.imgbb.com/albums?list=albums
-cargo run -p imgbb -- profile-download https://beautif11.imgbb.com/albums?list=albums --album-url https://ibb.co/album/ABC123/
+imgbb profile https://beautif11.imgbb.com/albums?list=albums
+imgbb profile --json https://beautif11.imgbb.com/albums?list=albums
+imgbb profile-download -o downloads https://beautif11.imgbb.com/albums?list=albums
+imgbb profile-download https://beautif11.imgbb.com/albums?list=albums --album-url https://ibb.co/album/ABC123/
 ```
 
 需要登录态的命令可以直接传参，也可以使用环境变量：
@@ -49,25 +49,25 @@ cargo run -p imgbb -- profile-download https://beautif11.imgbb.com/albums?list=a
 export IMGBB_LOGIN_SUBJECT="you@example.com"
 export IMGBB_PASSWORD="your-password"
 
-cargo run -p imgbb -- login
-cargo run -p imgbb -- status
-cargo run -p imgbb -- mine
-cargo run -p imgbb -- mine --json
-cargo run -p imgbb -- profile
-cargo run -p imgbb -- create-album "Demo Album" --privacy private
-cargo run -p imgbb -- upload-image ABC123 ./photo.jpg
-cargo run -p imgbb -- edit-image IMAGE123 --title "New title" --description "New description"
-cargo run -p imgbb -- delete-image IMAGE123
-cargo run -p imgbb -- delete-album ABC123
-cargo run -p imgbb -- upload-profile-background ./background.jpg
-cargo run -p imgbb -- delete-profile-background
-cargo run -p imgbb -- logout
+imgbb login
+imgbb status
+imgbb mine
+imgbb mine --json
+imgbb profile
+imgbb create-album "Demo Album" --privacy private
+imgbb upload-image ABC123 ./photo.jpg
+imgbb edit-image IMAGE123 --title "New title" --description "New description"
+imgbb delete-image IMAGE123
+imgbb delete-album ABC123
+imgbb upload-profile-background ./background.jpg
+imgbb delete-profile-background
+imgbb logout
 ```
 
 也可以在单条命令中传入登录凭据：
 
 ```bash
-cargo run -p imgbb -- login --login-subject you@example.com --password your-password
+imgbb login --login-subject you@example.com --password your-password
 ```
 
 `login` 会把 Cookie 会话保存到当前目录的 `.imgbb-session.json`，不会保存密码。后续 `profile` 可以省略 URL，管理类命令也会自动复用这个登录态。可以通过全局参数 `--session <PATH>` 指定其他会话文件。
@@ -85,5 +85,5 @@ cp imgbb/config.example.toml config.toml
 也可以显式指定配置：
 
 ```bash
-cargo run -p imgbb -- --config imgbb/config.example.toml album https://ibb.co/album/ABC123
+imgbb --config imgbb/config.example.toml album https://ibb.co/album/ABC123
 ```

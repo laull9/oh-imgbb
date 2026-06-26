@@ -115,32 +115,18 @@
   border-radius: 6px;
 }
 
-.header {
-  height: 64px;
-  display: flex;
-  align-items: center;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--panel-bg);
-}
-
 .content {
   display: flex;
   align-items: flex-start;
-  height: calc(100vh - 64px);
+  height: 100vh;
   min-height: 0;
   padding: 20px 24px 28px;
   overflow: auto;
 }
 
 @media (max-width: 980px) {
-  .shellTop .header {
-    height: 52px;
-    padding: 0 20px;
-  }
-
   .shellTop .content {
-    height: calc(100vh - 116px);
+    height: calc(100vh - 64px);
     padding: 14px;
   }
 }
@@ -182,6 +168,6 @@
   }
 
   .shellTop .content {
-    height: calc(100vh - 140px);
+    height: calc(100vh - 88px);
   }
 }

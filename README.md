@@ -79,44 +79,44 @@ cargo test --workspace
 解析 ImgBB 相册：
 
 ```bash
-cargo run -p imgbb -- parse-album https://ibb.co/album/ABC123
-cargo run -p imgbb -- parse-album --json https://ibb.co/album/ABC123
+imgbb parse-album https://ibb.co/album/ABC123
+imgbb parse-album --json https://ibb.co/album/ABC123
 ```
 
 下载 ImgBB 相册：
 
 ```bash
-cargo run -p imgbb -- album https://ibb.co/album/ABC123
+imgbb album https://ibb.co/album/ABC123
 ```
 
 下载相册到指定目录，或只下载解析结果里的指定图片：
 
 ```bash
-cargo run -p imgbb -- album -o downloads https://ibb.co/album/ABC123
-cargo run -p imgbb -- images https://ibb.co/album/ABC123 --image-id https://i.ibb.co/demo/a.jpg
+imgbb album -o downloads https://ibb.co/album/ABC123
+imgbb images https://ibb.co/album/ABC123 --image-id https://i.ibb.co/demo/a.jpg
 ```
 
 遍历 ImgBB 个人空间，或批量下载空间中的相册：
 
 ```bash
-cargo run -p imgbb -- profile https://example.imgbb.com/albums?list=albums
-cargo run -p imgbb -- profile-download -o downloads https://example.imgbb.com/albums?list=albums
+imgbb profile https://example.imgbb.com/albums?list=albums
+imgbb profile-download -o downloads https://example.imgbb.com/albums?list=albums
 ```
 
 需要登录的命令可以使用 `--login-subject`/`--password`，或设置 `IMGBB_LOGIN_SUBJECT` 与 `IMGBB_PASSWORD`：
 
 ```bash
-cargo run -p imgbb -- login --login-subject you@example.com --password your-password
-cargo run -p imgbb -- status
-cargo run -p imgbb -- mine
-cargo run -p imgbb -- mine --json
-cargo run -p imgbb -- profile
-cargo run -p imgbb -- create-album "Demo Album" --privacy private
-cargo run -p imgbb -- upload-image ABC123 ./photo.jpg
-cargo run -p imgbb -- edit-image IMAGE123 --title "New title"
-cargo run -p imgbb -- delete-image IMAGE123
-cargo run -p imgbb -- delete-album ABC123
-cargo run -p imgbb -- logout
+imgbb login --login-subject you@example.com --password your-password
+imgbb status
+imgbb mine
+imgbb mine --json
+imgbb profile
+imgbb create-album "Demo Album" --privacy private
+imgbb upload-image ABC123 ./photo.jpg
+imgbb edit-image IMAGE123 --title "New title"
+imgbb delete-image IMAGE123
+imgbb delete-album ABC123
+imgbb logout
 ```
 
 `login` 会保存 Cookie 会话到默认 `.imgbb-session.json`，不会保存密码。可以用全局参数 `--session <PATH>` 指定其他会话文件。
@@ -136,7 +136,7 @@ cp imgbb/config.example.toml config.toml
 也可以显式指定配置文件：
 
 ```bash
-cargo run -p imgbb -- --config imgbb/config.example.toml album https://ibb.co/album/ABC123
+imgbb --config imgbb/config.example.toml album https://ibb.co/album/ABC123
 ```
 
 `oh-imgbb` 桌面应用会通过 Tauri 后端保存自己的本地设置、缓存元数据、收藏和解析标签页。默认下载目录是系统 Downloads 目录。

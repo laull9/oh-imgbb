@@ -31,13 +31,6 @@ export function AppLayout() {
     { key: "mine", icon: <UserOutlined />, label: "我的" },
     { key: "settings", icon: <SettingOutlined />, label: "设置" },
   ];
-  const page_title = {
-    parse: "解析与下载",
-    favorites: "本地收藏",
-    downloads: "下载任务",
-    mine: "我的",
-    settings: "应用设置",
-  }[page];
   const page_content = (
     <>
       {page === "parse" && (
@@ -81,9 +74,6 @@ export function AppLayout() {
           />
         </Sider>
         <Layout>
-          <Header className={styles.header}>
-            <Typography.Text strong>{page_title}</Typography.Text>
-          </Header>
           <Content className={styles.content}>{page_content}</Content>
         </Layout>
       </Layout>
@@ -103,9 +93,6 @@ export function AppLayout() {
           onClick={(item) => setPage(item.key as PageKey)}
           items={menu_items}
         />
-      </Header>
-      <Header className={styles.header}>
-        <Typography.Text strong>{page_title}</Typography.Text>
       </Header>
       <Content className={styles.content}>{page_content}</Content>
     </Layout>
