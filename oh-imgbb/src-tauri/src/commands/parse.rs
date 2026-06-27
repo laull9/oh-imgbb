@@ -1,12 +1,9 @@
 //! parse 命令负责解析 ImgBB 相册和个人空间。
 
-use std::collections::HashSet;
-
 use anyhow::Result;
 use imgbb::ibb_spider::{
     IbbAlbumDetail, IbbLoginSession, IbbProfileBatch, IbbProfileReport, IbbSpiderManager,
 };
-use llpha::{AggregateSearch, SearchEngine, SearchPing, SearchResult};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State, Window};
 
@@ -22,14 +19,6 @@ use crate::thumbnail_cache::{self, ThumbnailCacheEvent};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProfileDetail {
     pub url: String,
-    pub albums: Vec<imgbb::ibb_spider::IbbProfileAlbum>,
-}
-
-/// SearchAlbumsDetail 保存网络搜索提取到的 ImgBB 相册列表。
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SearchAlbumsDetail {
-    pub query: String,
-    pub search_query: String,
     pub albums: Vec<imgbb::ibb_spider::IbbProfileAlbum>,
 }
 
@@ -285,40 +274,6 @@ pub async fn parse_profile(
     )
 }
 
-/// 探测当前聚合搜索是否可用。
-#[tauri::command]
-pub async fn ping_websearch() -> Result<SearchPing, String> {
-    command_result(
-        async {
-            let search = AggregateSearch::builder().limit(5).build()?;
-
-            search.ping().await
-        }
-        .await,
-    )
-}
-
-/// 搜索公开 ImgBB 相册并返回个人空间格式的相册列表。
-#[tauri::command]
-pub async fn search_imgbb_albums(query: String) -> Result<SearchAlbumsDetail, String> {
-    command_result(
-        async {
-            let query = query.trim().to_string();
-            let search_query = build_imgbb_album_search_query(&query);
-            let search = AggregateSearch::builder().limit(50).build()?;
-            let response = search.search(&search_query).await?;
-            let albums = extract_profile_albums_from_search(&response.results);
-
-            Ok(SearchAlbumsDetail {
-                query,
-                search_query,
-                albums,
-            })
-        }
-        .await,
-    )
-}
-
 /// 读取可恢复的解析标签页列表。
 #[tauri::command]
 pub async fn list_parse_tabs(state: State<'_, AppState>) -> Result<Vec<ParseTabRecord>, String> {
@@ -346,147 +301,4 @@ pub async fn set_active_parse_tab(
     command_result(
         async { repository::set_active_parse_tab(&state.db_pool, tab_key.as_deref()).await }.await,
     )
-}
-
-/// 构造限定 ImgBB 域名的相册搜索词。
-fn build_imgbb_album_search_query(query: &str) -> String {
-    let query = query.trim();
-    if query.is_empty() {
-        "site:ibb.co".to_string()
-    } else {
-        format!("site:ibb.co {query}")
-    }
-}
-
-/// 从搜索结果中提取可识别的 ImgBB 相册列表。
-fn extract_profile_albums_from_search(
-    results: &[SearchResult],
-) -> Vec<imgbb::ibb_spider::IbbProfileAlbum> {
-    let mut seen_urls = HashSet::new();
-    let mut albums = Vec::new();
-
-    for result in results {
-        let mut candidates = collect_album_urls_from_text(&result.url);
-        candidates.extend(collect_album_urls_from_text(&result.snippet));
-
-        for url in candidates {
-            let Ok(normalized_url) = IbbSpiderManager::normalize_album_url(&url) else {
-                continue;
-            };
-            if !seen_urls.insert(normalized_url.clone()) {
-                continue;
-            }
-
-            albums.push(imgbb::ibb_spider::IbbProfileAlbum {
-                name: clean_search_album_name(&result.title, &normalized_url),
-                url: normalized_url,
-                cover_url: None,
-            });
-        }
-    }
-
-    albums
-}
-
-/// 从文本中收集可能的 ImgBB 相册 URL。
-fn collect_album_urls_from_text(text: &str) -> Vec<String> {
-    let mut urls = Vec::new();
-    let mut start_index = 0usize;
-
-    while let Some(relative_index) = text[start_index..].find("ibb.co/album/") {
-        let absolute_index = start_index + relative_index;
-        let candidate_start = find_url_candidate_start(text, absolute_index);
-        let candidate_end = find_url_candidate_end(text, absolute_index);
-        let candidate = text[candidate_start..candidate_end]
-            .trim_matches(|value: char| matches!(value, '"' | '\'' | ',' | '.' | ')' | ']' | '}'));
-        let candidate = if candidate.starts_with("http://") || candidate.starts_with("https://") {
-            candidate.to_string()
-        } else {
-            format!("https://{candidate}")
-        };
-
-        urls.push(candidate);
-        start_index = candidate_end;
-    }
-
-    urls
-}
-
-/// 向前定位 URL 候选片段的起始位置。
-fn find_url_candidate_start(text: &str, album_marker_index: usize) -> usize {
-    let prefix = &text[..album_marker_index];
-    let scheme_start = prefix
-        .rfind("https://")
-        .or_else(|| prefix.rfind("http://"))
-        .unwrap_or(album_marker_index);
-
-    if scheme_start + "https://".len() >= album_marker_index
-        || scheme_start + "http://".len() >= album_marker_index
-    {
-        scheme_start
-    } else {
-        album_marker_index
-    }
-}
-
-/// 向后定位 URL 候选片段的结束位置。
-fn find_url_candidate_end(text: &str, album_marker_index: usize) -> usize {
-    text[album_marker_index..]
-        .find(|value: char| {
-            value.is_whitespace() || matches!(value, '"' | '\'' | '<' | '>' | ')' | ']' | '}')
-        })
-        .map(|index| album_marker_index + index)
-        .unwrap_or(text.len())
-}
-
-/// 清理搜索结果标题作为相册展示名称。
-fn clean_search_album_name(title: &str, fallback_url: &str) -> String {
-    let title = title.trim();
-    if title.is_empty() {
-        return fallback_url.to_string();
-    }
-
-    title
-        .trim_end_matches("- ImgBB")
-        .trim_end_matches("| ImgBB")
-        .trim()
-        .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 验证搜索词会限制到 ibb.co 域名。
-    #[test]
-    fn search_query_adds_site_filter() {
-        assert_eq!(
-            build_imgbb_album_search_query("demo album"),
-            "site:ibb.co demo album"
-        );
-    }
-
-    /// 验证搜索结果可以提取并规整相册地址。
-    #[test]
-    fn search_results_extract_album_urls() {
-        let results = vec![
-            SearchResult {
-                title: "Demo - ImgBB".to_string(),
-                url: "https://ibb.co/album/ABC123/?sort=name_asc".to_string(),
-                snippet: String::new(),
-            },
-            SearchResult {
-                title: "Duplicate".to_string(),
-                url: "https://example.com".to_string(),
-                snippet: "see https://ibb.co/album/ABC123/ and ibb.co/album/XYZ789".to_string(),
-            },
-        ];
-
-        let albums = extract_profile_albums_from_search(&results);
-
-        assert_eq!(albums.len(), 2);
-        assert_eq!(albums[0].name, "Demo");
-        assert_eq!(albums[0].url, "https://ibb.co/album/ABC123/");
-        assert_eq!(albums[1].url, "https://ibb.co/album/XYZ789/");
-    }
 }

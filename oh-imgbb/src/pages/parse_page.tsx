@@ -377,7 +377,11 @@ export function ParsePage({ openTarget, onTargetHandled, onOpenDownloads }: Pars
       const response = await searchImgbbAlbums(keyword);
       openSearchResultTab(response.query, response.search_query, response.albums);
       if (response.albums.length === 0) {
-        message.warning("没有提取到 ImgBB 相册地址");
+        const suffix =
+          response.errors.length > 0
+            ? `；搜索源异常：${response.errors.slice(0, 2).join("；")}`
+            : "";
+        message.warning(`没有提取到 ImgBB 相册地址，候选结果 ${response.result_count} 条${suffix}`);
       } else {
         message.success(`已找到 ${response.albums.length} 个相册`);
       }

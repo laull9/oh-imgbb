@@ -7,6 +7,7 @@ pub mod engine;
 pub mod fake;
 pub mod logging;
 pub mod plugin;
+pub mod user_agents;
 pub mod websearch;
 
 pub use analysis::{
@@ -38,6 +39,10 @@ pub use fake::{
 };
 pub use logging::{LoggingGuard, init_logging};
 pub use plugin::{Plugin, PluginContext, PluginRegistry};
+pub use user_agents::{
+    get_user_agent, has_user_agent, user_agent_count, user_agent_is_empty, user_agent_names,
+    user_agent_values, user_agents,
+};
 pub use websearch::{
     AggregateSearch, AggregateSearchBuilder, BingSearch, BingSearchBuilder, DEFAULT_BING_BASE_URL,
     DEFAULT_DUCKDUCKGO_BASE_URL, DEFAULT_MAX_SEARCH_PAGES, DEFAULT_SEARCH_LIMIT,

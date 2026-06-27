@@ -62,6 +62,8 @@ export interface SearchPing {
 export interface SearchAlbumsDetail {
   query: string;
   search_query: string;
+  result_count: number;
+  errors: string[];
   albums: ProfileAlbum[];
 }
 

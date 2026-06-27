@@ -7,3 +7,4 @@ pub mod image_detail;
 pub mod manage;
 pub mod parse;
 pub mod settings;
+pub mod websearch;

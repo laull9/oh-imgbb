@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use reqwest::Url;
+use reqwest::{Url, header::CONTENT_TYPE};
 use scraper::Html;
 
-use crate::downloader::LlphaClient;
+use crate::downloader::{FetchRequest, LlphaClient, browser_page_headers, insert_header};
 
 use crate::websearch::config::{SearchBuilder, SearchConfig};
 use crate::websearch::core::{
@@ -17,7 +17,7 @@ use crate::websearch::types::{
 };
 
 /// DEFAULT_SEARXNG_BASE_URL 表示默认 SearxNG 搜索地址。
-pub const DEFAULT_SEARXNG_BASE_URL: &str = "https://searxng.website/search";
+pub const DEFAULT_SEARXNG_BASE_URL: &str = "https://searxng.website/searxng/search";
 
 /// DEFAULT_SEARXNG_FALLBACK_BASE_URL 表示默认 SearxNG 回退搜索地址。
 pub const DEFAULT_SEARXNG_FALLBACK_BASE_URL: &str = "https://search.liuzj.net/search";
@@ -186,12 +186,31 @@ impl SearchProvider for SearxNgSearch {
     fn parse_page(&self, html: &str, page_url: &str) -> Result<SearchPage> {
         parse_searxng_page(html, page_url)
     }
+
+    /// 构造 SearxNG 表单搜索请求。
+    fn page_request(&self, base_url: &str, page_url: &str) -> Result<FetchRequest> {
+        build_searxng_post_request(base_url, page_url, self.config.timeout)
+    }
+
+    /// 构造 SearxNG 表单 ping 请求。
+    fn ping_request(&self, base_url: &str, page_url: &str) -> Result<FetchRequest> {
+        build_searxng_post_request(
+            base_url,
+            page_url,
+            self.config
+                .timeout
+                .min(crate::websearch::config::DEFAULT_SEARCH_PING_TIMEOUT),
+        )
+    }
 }
 
 /// 解析 SearxNG 搜索页面内容。
 fn parse_searxng_page(html: &str, page_url: &str) -> Result<SearchPage> {
     if is_rate_limited_page(html) {
         return Err(anyhow!("SearxNG 镜像返回限流响应"));
+    }
+    if is_index_page(html) {
+        return Err(anyhow!("SearxNG 镜像返回首页而不是搜索结果页"));
     }
 
     let document = Html::parse_document(html);
@@ -236,7 +255,55 @@ fn parse_searxng_page(html: &str, page_url: &str) -> Result<SearchPage> {
         .find_map(|link| link.value().attr("href"))
         .and_then(|href| absolute_url(page_url, href));
 
+    if results.is_empty() && next_url.is_none() && !is_no_results_page(html) {
+        return Err(anyhow!("SearxNG 镜像没有返回可解析的搜索结果"));
+    }
+
     Ok(SearchPage::new(results, next_url))
+}
+
+/// 构造 SearxNG POST 搜索请求。
+fn build_searxng_post_request(
+    base_url: &str,
+    page_url: &str,
+    timeout: std::time::Duration,
+) -> Result<FetchRequest> {
+    let mut url =
+        Url::parse(page_url).with_context(|| format!("解析 SearxNG 搜索地址失败: {page_url}"))?;
+    let query = url
+        .query_pairs()
+        .find(|(key, _)| key == "q")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default();
+    let pageno = url
+        .query_pairs()
+        .find(|(key, _)| key == "pageno")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_else(|| "1".to_string());
+    let mut body_url = Url::parse("https://llpha.local/")?;
+    body_url
+        .query_pairs_mut()
+        .append_pair("q", &query)
+        .append_pair("category_general", "1")
+        .append_pair("language", "auto")
+        .append_pair("time_range", "")
+        .append_pair("safesearch", "0")
+        .append_pair("theme", "simple")
+        .append_pair("pageno", &pageno);
+    let body = body_url.query().unwrap_or_default().to_string();
+
+    let mut headers = browser_page_headers(base_url)?;
+    insert_header(
+        &mut headers,
+        CONTENT_TYPE,
+        "application/x-www-form-urlencoded",
+    )?;
+
+    url.set_query(None);
+
+    Ok(FetchRequest::post(url.to_string(), body)
+        .with_headers(headers)
+        .with_timeout(timeout))
 }
 
 /// 判断页面是否为镜像限流响应。
@@ -244,6 +311,19 @@ fn is_rate_limited_page(html: &str) -> bool {
     normalize_space(html).eq_ignore_ascii_case("Too Many Requests")
         || html.contains("HTTP 429")
         || html.contains("rate limit")
+}
+
+/// 判断页面是否仍停留在 SearxNG 首页。
+fn is_index_page(html: &str) -> bool {
+    html.contains(r#"name="endpoint" content="index""#)
+        || html.contains(r#"name="endpoint" content='index'"#)
+}
+
+/// 判断页面是否明确表示没有搜索结果。
+fn is_no_results_page(html: &str) -> bool {
+    html.contains("no_item_found")
+        || html.contains("未找到项目")
+        || html.to_ascii_lowercase().contains("no results")
 }
 
 /// 判断地址是否为 HTTP 结果地址。
@@ -286,6 +366,31 @@ mod tests {
         assert!(url.contains("pageno=2"));
     }
 
+    /// 验证 SearxNG 会构造表单 POST 请求。
+    #[test]
+    fn searxng_page_request_uses_post_form() {
+        let search = SearxNgSearch::builder().limit(5).build().unwrap();
+        let page_url =
+            SearchProvider::page_url(&search, DEFAULT_SEARXNG_BASE_URL, "rust async", 0, 0)
+                .unwrap();
+        let request =
+            SearchProvider::page_request(&search, DEFAULT_SEARXNG_BASE_URL, &page_url).unwrap();
+
+        assert_eq!(request.method, crate::downloader::HttpMethod::Post);
+        assert!(!request.url.contains("?q="));
+        assert_eq!(
+            request
+                .options
+                .headers
+                .get(CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "application/x-www-form-urlencoded"
+        );
+        assert!(request.body.as_deref().unwrap().contains("q=rust+async"));
+    }
+
     /// 验证 SearxNG 页面解析可以提取搜索结果。
     #[test]
     fn searxng_parser_extracts_results() {
@@ -311,6 +416,21 @@ mod tests {
         );
     }
 
+    /// 验证 SearxNG 首页不会被误判为空搜索结果。
+    #[test]
+    fn searxng_parser_rejects_index_page() {
+        let html = r#"
+            <html><head><meta name="endpoint" content="index"></head>
+            <body><form id="search" method="POST" action="/search"></form></body></html>
+        "#;
+
+        let err = parse_searxng_page(html, "https://searxng.website/search?q=rust")
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("首页"));
+    }
+
     /// live 验证 SearxNG 搜索可以从真实页面返回结果。
     #[tokio::test]
     #[ignore = "live 测试需要访问 SearxNG 镜像"]
@@ -325,6 +445,14 @@ mod tests {
             Ok(response) => response,
             Err(err) if err.to_string().contains("限流") => {
                 eprintln!("SearxNG 镜像当前限流，跳过结果断言: {err}");
+                return;
+            }
+            Err(err) if err.to_string().contains("429") => {
+                eprintln!("SearxNG 镜像当前限流，跳过结果断言: {err}");
+                return;
+            }
+            Err(err) if err.to_string().contains("首页") => {
+                eprintln!("SearxNG 镜像当前没有返回搜索页，跳过结果断言: {err}");
                 return;
             }
             Err(err) => panic!("SearxNG live 搜索失败: {err}"),

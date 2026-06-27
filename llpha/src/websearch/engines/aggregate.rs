@@ -8,7 +8,7 @@ use crate::websearch::config::DEFAULT_SEARCH_LIMIT;
 use crate::websearch::core::SearchEngine;
 use crate::websearch::types::{SearchEngineKind, SearchPing, SearchResponse, SearchResult};
 
-use super::{DuckDuckGoSearch, SearxNgSearch};
+use super::{BingSearch, DuckDuckGoSearch, SearxNgSearch};
 
 /// AggregateSearchBuilder 构建聚合搜索引擎。
 #[derive(Clone, Default)]
@@ -52,6 +52,7 @@ impl AggregateSearchBuilder {
                 Arc::new(SearxNgSearch::builder().limit(limit).build()?) as Arc<dyn SearchEngine>,
                 Arc::new(DuckDuckGoSearch::builder().limit(limit).build()?)
                     as Arc<dyn SearchEngine>,
+                Arc::new(BingSearch::builder().limit(limit).build()?) as Arc<dyn SearchEngine>,
             ]
         } else {
             self.engines
@@ -176,15 +177,22 @@ fn merge_result_groups(result_groups: Vec<Vec<SearchResult>>, limit: usize) -> V
 mod tests {
     use super::*;
 
+    /// LIVE_TEST_QUERY 表示 live 搜索测试使用的稳定查询词。
+    const LIVE_TEST_QUERY: &str = "rust programming language";
+
     /// 验证默认聚合搜索包含内置引擎。
     #[test]
     fn aggregate_search_uses_default_engines() {
         let search = AggregateSearch::builder().limit(20).build().unwrap();
 
-        assert_eq!(search.engine_count(), 2);
+        assert_eq!(search.engine_count(), 3);
         assert_eq!(
             search.engine_kinds(),
-            vec![SearchEngineKind::SearxNg, SearchEngineKind::DuckDuckGo]
+            vec![
+                SearchEngineKind::SearxNg,
+                SearchEngineKind::DuckDuckGo,
+                SearchEngineKind::Bing,
+            ]
         );
     }
 
@@ -227,15 +235,86 @@ mod tests {
         );
     }
 
-    /// live 验证聚合搜索可以从真实页面返回结果。
+    /// live 验证聚合搜索可以从真实页面返回结果并打印详情。
     #[tokio::test]
     #[ignore = "live 测试需要访问搜索引擎"]
     async fn live_aggregate_search_returns_results() {
         let search = AggregateSearch::builder().limit(20).build().unwrap();
+        let ping = search.ping().await.unwrap();
 
-        let response = search.search("rust programming language").await.unwrap();
+        print_ping_report(&ping);
+        assert!(ping.available, "至少一个搜索引擎应当可用");
 
+        let mut successful_engines = 0usize;
+        for engine in &search.engines {
+            match engine.search(LIVE_TEST_QUERY).await {
+                Ok(response) => {
+                    print_search_response(&format!("{:?}", engine.kind()), &response);
+                    if !response.results.is_empty() {
+                        successful_engines += 1;
+                    }
+                }
+                Err(err) => {
+                    println!(
+                        "\n=== {:?} 搜索失败 ===\n查询词: {}\n错误: {err}",
+                        engine.kind(),
+                        LIVE_TEST_QUERY
+                    );
+                }
+            }
+        }
+
+        let response = search.search(LIVE_TEST_QUERY).await.unwrap();
+
+        print_search_response("Aggregate", &response);
+        assert!(
+            successful_engines > 0,
+            "至少一个子搜索引擎应当返回真实搜索结果"
+        );
         assert!(!response.results.is_empty());
         assert!(response.results.len() <= 20);
+    }
+
+    /// 打印搜索引擎 ping 结果。
+    fn print_ping_report(ping: &SearchPing) {
+        println!(
+            "\n=== 聚合搜索 ping ===\n可用: {}\nbase_url: {}\n延迟: {}ms\n错误: {}",
+            ping.available,
+            ping.base_url,
+            ping.latency_ms,
+            ping.error.as_deref().unwrap_or("-")
+        );
+
+        for child in &ping.children {
+            println!(
+                "- {:?}: available={}, status={:?}, latency={}ms, base_url={}, error={}",
+                child.engine,
+                child.available,
+                child.status,
+                child.latency_ms,
+                child.base_url,
+                child.error.as_deref().unwrap_or("-")
+            );
+        }
+    }
+
+    /// 打印搜索响应中的真实结果。
+    fn print_search_response(label: &str, response: &SearchResponse) {
+        println!(
+            "\n=== {label} 搜索结果 ===\n查询词: {}\n抓取页数: {}\n结果数: {}",
+            response.query,
+            response.pages_fetched,
+            response.results.len()
+        );
+
+        for (index, result) in response.results.iter().enumerate() {
+            println!(
+                "\n{}. {}\nURL: {}\n摘要: {}",
+                index + 1,
+                result.title,
+                result.url,
+                result.snippet
+            );
+        }
     }
 }

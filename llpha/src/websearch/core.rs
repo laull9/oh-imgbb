@@ -59,6 +59,23 @@ pub(crate) trait SearchProvider: Send + Sync {
 
     /// 解析搜索页面内容。
     fn parse_page(&self, html: &str, page_url: &str) -> Result<SearchPage>;
+
+    /// 构造抓取搜索页面的请求。
+    fn page_request(&self, base_url: &str, page_url: &str) -> Result<FetchRequest> {
+        let headers = browser_page_headers(base_url)?;
+        Ok(FetchRequest::get(page_url.to_string())
+            .with_headers(headers)
+            .with_timeout(self.config().timeout))
+    }
+
+    /// 构造搜索引擎可用性探测请求。
+    fn ping_request(&self, base_url: &str, page_url: &str) -> Result<FetchRequest> {
+        let headers = browser_page_headers(base_url)?;
+        let timeout = self.config().timeout.min(DEFAULT_SEARCH_PING_TIMEOUT);
+        Ok(FetchRequest::get(page_url.to_string())
+            .with_headers(headers)
+            .with_timeout(timeout))
+    }
 }
 
 /// 执行通用搜索引擎可用性探测。
@@ -215,17 +232,14 @@ async fn fetch_page<P>(provider: &P, base_url: &str, page_url: &str) -> Result<S
 where
     P: SearchProvider,
 {
-    let headers = browser_page_headers(base_url)?;
-    let request = FetchRequest::get(page_url.to_string())
-        .with_headers(headers)
-        .with_timeout(provider.config().timeout);
+    let request = provider.page_request(base_url, page_url)?;
     let response = provider
         .client()
         .fetch(request)
         .await
         .with_context(|| format!("请求搜索页面失败: {page_url}"))?;
 
-    if !response.is_success() {
+    if response.status.as_u16() != 200 {
         return Err(anyhow!("搜索页面返回异常状态码: {}", response.status));
     }
 
@@ -238,11 +252,7 @@ where
     P: SearchProvider,
 {
     let started_at = Instant::now();
-    let headers = browser_page_headers(base_url)?;
-    let timeout = provider.config().timeout.min(DEFAULT_SEARCH_PING_TIMEOUT);
-    let request = FetchRequest::get(page_url.to_string())
-        .with_headers(headers)
-        .with_timeout(timeout);
+    let request = provider.ping_request(base_url, page_url)?;
     let response = provider
         .client()
         .fetch(request)
@@ -251,7 +261,7 @@ where
     let latency_ms = started_at.elapsed().as_millis();
     let status = response.status.as_u16();
 
-    if !response.is_success() {
+    if status != 200 {
         return Ok(SearchPing::single(
             provider.kind(),
             false,
