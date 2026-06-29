@@ -17,6 +17,7 @@ import styles from "../css/image_detail_viewer.module.css";
 interface ImageDetailViewerProps {
   images: AlbumImage[];
   currentIndex?: number;
+  detailReferer?: string;
   onIndexChange: (index: number) => void;
   onClose: () => void;
 }
@@ -43,6 +44,7 @@ interface DragState {
 export function ImageDetailViewer({
   images,
   currentIndex,
+  detailReferer,
   onIndexChange,
   onClose,
 }: ImageDetailViewerProps) {
@@ -88,7 +90,7 @@ export function ImageDetailViewer({
     dragStateRef.current = undefined;
     setLoading(true);
 
-    downloadDetailImage(currentImage.image_url)
+    downloadDetailImage(currentImage.image_url, detailReferer)
       .then((response) => {
         if (disposed) {
           void removeDetailImage(response.local_path);
@@ -115,7 +117,7 @@ export function ImageDetailViewer({
     return () => {
       disposed = true;
     };
-  }, [open, currentImage?.id, currentImage?.image_url, reloadKey, message]);
+  }, [open, currentImage?.id, currentImage?.image_url, detailReferer, reloadKey, message]);
 
   useEffect(() => {
     return () => {

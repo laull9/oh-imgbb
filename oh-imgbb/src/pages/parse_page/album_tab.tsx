@@ -98,6 +98,7 @@ export function AlbumTabView({
             images={visibleImages}
             selectedIds={tab.selectedImageIds}
             onSelectedIdsChange={(ids) => onUpdateSelection(tab.key, ids)}
+            detailReferer={album.url}
           />
           {displaySettings.pagination_enabled && filteredImages.length > displaySettings.album_page_size && (
             <Pagination

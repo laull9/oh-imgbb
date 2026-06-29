@@ -144,8 +144,8 @@ export async function clearThumbnailCache() {
   return invoke<void>("clear_thumbnail_cache");
 }
 
-export async function downloadDetailImage(url: string) {
-  return invoke<DetailImageResponse>("download_detail_image", { url });
+export async function downloadDetailImage(url: string, referer?: string) {
+  return invoke<DetailImageResponse>("download_detail_image", { url, referer });
 }
 
 export async function removeDetailImage(path: string) {

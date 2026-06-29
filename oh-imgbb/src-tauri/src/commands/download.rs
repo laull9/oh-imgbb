@@ -1,7 +1,9 @@
 //! download 命令负责创建和管理 ImgBB 下载任务。
 
 use anyhow::{bail, Result};
-use imgbb::ibb_spider::{IbbAlbumDetail, IbbDownloadProgressEvent, IbbSpiderManager};
+use imgbb::ibb_spider::{
+    IbbAlbumDetail, IbbDownloadProgressEvent, IbbLoginSession, IbbSpiderManager,
+};
 use llpha::{LlphaClient, RetryPolicy};
 use tauri::{Emitter, State, Window};
 
@@ -33,6 +35,11 @@ async fn configured_manager(state: &AppState) -> Result<IbbSpiderManager> {
     }
 
     Ok(manager)
+}
+
+/// 读取当前登录会话。
+async fn current_login_session(state: &AppState) -> Option<IbbLoginSession> {
+    state.login_session.lock().await.clone()
 }
 
 /// 转换下载摘要为前端结构。
@@ -104,16 +111,19 @@ async fn run_album_url_task(
     task_id: u64,
     manager: IbbSpiderManager,
     url: String,
+    session: Option<IbbLoginSession>,
 ) {
     emit_optional_task_update(&window, store.mark_running(task_id).await);
 
     let result = async {
-        let report = manager
-            .download_album_with_progress(
-                url,
-                progress_callback(window.clone(), store.clone(), task_id),
-            )
-            .await?;
+        let progress = progress_callback(window.clone(), store.clone(), task_id);
+        let report = if let Some(session) = session.as_ref() {
+            manager
+                .download_authenticated_album_with_progress(session, url, progress)
+                .await?
+        } else {
+            manager.download_album_with_progress(url, progress).await?
+        };
         let report = to_download_report(report);
         Ok::<_, anyhow::Error>((report.downloaded_files, report.bytes_written))
     }
@@ -130,17 +140,23 @@ async fn run_album_images_task(
     manager: IbbSpiderManager,
     album: IbbAlbumDetail,
     image_ids: Vec<String>,
+    session: Option<IbbLoginSession>,
 ) {
     emit_optional_task_update(&window, store.mark_running(task_id).await);
 
     let result = async {
-        let report = manager
-            .download_album_images_with_progress(
-                &album,
-                &image_ids,
-                progress_callback(window.clone(), store.clone(), task_id),
-            )
-            .await?;
+        let progress = progress_callback(window.clone(), store.clone(), task_id);
+        let report = if let Some(session) = session.as_ref() {
+            manager
+                .download_authenticated_album_images_with_progress(
+                    session, &album, &image_ids, progress,
+                )
+                .await?
+        } else {
+            manager
+                .download_album_images_with_progress(&album, &image_ids, progress)
+                .await?
+        };
         let report = to_download_report(report);
         Ok::<_, anyhow::Error>((report.downloaded_files, report.bytes_written))
     }
@@ -156,6 +172,7 @@ async fn run_profile_batch_task(
     task_id: u64,
     manager: IbbSpiderManager,
     urls: Vec<String>,
+    session: Option<IbbLoginSession>,
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     emit_optional_task_update(&window, store.mark_running(task_id).await);
@@ -166,13 +183,15 @@ async fn run_profile_batch_task(
             return;
         }
 
-        let result = manager
-            .download_album_with_progress(
-                url,
-                progress_callback(window.clone(), store.clone(), task_id),
-            )
-            .await
-            .map(to_download_report);
+        let progress = progress_callback(window.clone(), store.clone(), task_id);
+        let result = if let Some(session) = session.as_ref() {
+            manager
+                .download_authenticated_album_with_progress(session, url, progress)
+                .await
+        } else {
+            manager.download_album_with_progress(url, progress).await
+        }
+        .map(to_download_report);
         match result {
             Ok(_report) => {}
             Err(err) => {
@@ -216,6 +235,7 @@ pub async fn download_album(
         async {
             let normalized_url = IbbSpiderManager::normalize_album_url(&url)?;
             let manager = configured_manager(&state).await?;
+            let session = current_login_session(&state).await;
             let store = state.download_tasks.clone();
             let (task, _) = store
                 .create_task(
@@ -232,6 +252,7 @@ pub async fn download_album(
                 task_id,
                 manager,
                 normalized_url,
+                session,
             ));
             store.attach_handle(task_id, handle).await;
 
@@ -256,6 +277,7 @@ pub async fn download_album_images(
             }
 
             let manager = configured_manager(&state).await?;
+            let session = current_login_session(&state).await;
             let store = state.download_tasks.clone();
             let (task, _) = store
                 .create_task(
@@ -273,6 +295,7 @@ pub async fn download_album_images(
                 manager,
                 album,
                 image_ids,
+                session,
             ));
             store.attach_handle(task_id, handle).await;
 
@@ -296,6 +319,7 @@ pub async fn download_profile_albums(
             }
 
             let manager = configured_manager(&state).await?;
+            let session = current_login_session(&state).await;
             let store = state.download_tasks.clone();
             let title = format!("批量下载 {} 个相册", urls.len());
             let target_url = urls.first().cloned().unwrap_or_default();
@@ -309,6 +333,7 @@ pub async fn download_profile_albums(
                 task_id,
                 manager,
                 urls,
+                session,
                 cancel_flag,
             ));
             store.attach_handle(task_id, handle).await;

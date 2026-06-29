@@ -10,6 +10,7 @@ interface ThumbnailGridProps {
   images: AlbumImage[];
   selectedIds: string[];
   onSelectedIdsChange: (ids: string[]) => void;
+  detailReferer?: string;
   onDeleteImage?: (image: AlbumImage) => void;
   deletingImageIds?: string[];
 }
@@ -26,6 +27,7 @@ export function ThumbnailGrid({
   images,
   selectedIds,
   onSelectedIdsChange,
+  detailReferer,
   onDeleteImage,
   deletingImageIds = [],
 }: ThumbnailGridProps) {
@@ -86,6 +88,7 @@ export function ThumbnailGrid({
       <ImageDetailViewer
         images={images}
         currentIndex={detailIndex}
+        detailReferer={detailReferer}
         onIndexChange={setDetailIndex}
         onClose={() => setDetailIndex(undefined)}
       />

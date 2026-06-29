@@ -28,5 +28,5 @@ sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio-rustls"] }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
-tokio = { version = "1.52.3", features = ["fs", "sync"] }
+tokio = { version = "1.52.3", features = ["fs", "sync", "time"] }
 tracing = "0.1"

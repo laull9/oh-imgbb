@@ -1,5 +1,11 @@
 //! fake 模块提供请求伪装策略能力。
 
+pub mod user_agents;
+pub use user_agents::{
+    get_user_agent, has_user_agent, user_agent_count, user_agent_is_empty, user_agent_names,
+    user_agent_values,
+};
+
 use anyhow::{Context, Result, anyhow};
 use rand::Rng;
 use reqwest::header::{
@@ -90,41 +96,10 @@ impl FakeProfile {
 
 /// browser_profiles 返回内置的常见浏览器伪装配置集合。
 pub fn browser_profiles() -> Vec<FakeProfile> {
-    vec![
-        FakeProfile::default().with_extra_header(
-            "sec-ch-ua",
-            r#""Chromium";v="139", "Google Chrome";v="139", "Not=A?Brand";v="99""#,
-        ),
-        FakeProfile::default()
-            .with_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36")
-            .with_accept_language("en-US,en;q=0.9,zh-CN;q=0.8")
-            .with_extra_header("sec-ch-ua", r#""Chromium";v="139", "Google Chrome";v="139", "Not=A?Brand";v="99""#),
-        FakeProfile::default()
-            .with_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0")
-            .with_accept("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-            .with_accept_encoding("gzip, deflate, br, zstd")
-            .with_extra_header("dnt", "1"),
-        FakeProfile::default()
-            .with_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15")
-            .with_accept("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .with_accept_encoding("gzip, deflate, br")
-            .with_accept_language("zh-CN,zh-Hans;q=0.9,en;q=0.8"),
-        FakeProfile::default()
-            .with_user_agent("Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1")
-            .with_accept("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .with_accept_encoding("gzip, deflate, br")
-            .with_accept_language("zh-CN,zh-Hans;q=0.9,en;q=0.8")
-            .with_extra_header("sec-fetch-site", "none"),
-        FakeProfile::default()
-            .with_user_agent("Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36")
-            .with_accept("text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-            .with_accept_language("zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
-            .with_extra_header("sec-ch-ua-mobile", "?1"),
-        FakeProfile::default()
-            .with_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0")
-            .with_accept_language("en-US,en;q=0.9")
-            .with_extra_header("sec-ch-ua", r#""Microsoft Edge";v="139", "Chromium";v="139", "Not=A?Brand";v="99""#),
-    ]
+    user_agent_values()
+        .filter(|user_agent| is_browser_user_agent(user_agent))
+        .map(|user_agent| FakeProfile::default().with_user_agent(user_agent))
+        .collect()
 }
 
 /// HeaderFakeStrategy 定义请求头伪装策略接口。
@@ -226,6 +201,11 @@ fn merge_headers(request: &mut FetchRequest, profile: &FakeProfile) -> Result<()
     Ok(())
 }
 
+/// 判断 User-Agent 是否适合作为浏览器伪装候选。
+fn is_browser_user_agent(user_agent: &str) -> bool {
+    user_agent.contains("Mozilla/") && HeaderValue::from_str(user_agent).is_ok()
+}
+
 /// 插入字符串请求头并转换错误类型。
 fn insert_header(headers: &mut HeaderMap, name: HeaderName, value: &str) -> Result<()> {
     headers.insert(name, HeaderValue::from_str(value)?);
@@ -253,7 +233,7 @@ mod tests {
     fn browser_profiles_have_multiple_choices() {
         let profiles = browser_profiles();
 
-        assert!(profiles.len() >= 6);
+        assert!(profiles.len() > 8_000);
         assert!(
             profiles
                 .iter()
@@ -264,6 +244,15 @@ mod tests {
                 .iter()
                 .any(|profile| profile.user_agent.contains("Mobile"))
         );
+    }
+
+    /// 验证内置浏览器集合来自 User-Agent 数据文件。
+    #[test]
+    fn browser_profiles_use_embedded_user_agents() {
+        let profiles = browser_profiles();
+        let mozilla = user_agents::get("mozilla").unwrap();
+
+        assert!(profiles.iter().any(|profile| profile.user_agent == mozilla));
     }
 
     /// 验证随机伪装策略可以写入增强请求头。

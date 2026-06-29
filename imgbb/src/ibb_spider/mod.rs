@@ -94,6 +94,28 @@ impl IbbSpiderManager {
         .await
     }
 
+    /// 使用登录态执行相册内容下载，并在下载过程中回调进度。
+    pub async fn download_authenticated_album_with_progress<F, Fut>(
+        &self,
+        session: &IbbLoginSession,
+        input_url: impl AsRef<str>,
+        progress: F,
+    ) -> Result<IbbSpiderReport>
+    where
+        F: Fn(IbbDownloadProgress) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        album::download_authenticated_album_with_progress(
+            self.client.clone(),
+            self.options.base_path.clone(),
+            self.options.file_name_mode.clone(),
+            session,
+            input_url.as_ref(),
+            Some(Arc::new(move |event| Box::pin(progress(event)))),
+        )
+        .await
+    }
+
     /// 下载已解析相册中的指定图片。
     pub async fn download_album_images(
         &self,
@@ -125,6 +147,30 @@ impl IbbSpiderManager {
             self.client.clone(),
             self.options.base_path.clone(),
             self.options.file_name_mode.clone(),
+            detail,
+            image_ids,
+            Some(Arc::new(move |event| Box::pin(progress(event)))),
+        )
+        .await
+    }
+
+    /// 使用登录态下载已解析相册中的指定图片，并在下载过程中回调进度。
+    pub async fn download_authenticated_album_images_with_progress<F, Fut>(
+        &self,
+        session: &IbbLoginSession,
+        detail: &IbbAlbumDetail,
+        image_ids: &[String],
+        progress: F,
+    ) -> Result<IbbSpiderReport>
+    where
+        F: Fn(IbbDownloadProgress) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        album::download_authenticated_album_images_with_progress(
+            self.client.clone(),
+            self.options.base_path.clone(),
+            self.options.file_name_mode.clone(),
+            session,
             detail,
             image_ids,
             Some(Arc::new(move |event| Box::pin(progress(event)))),

@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use llpha::*;
-use reqwest::{Url, header::COOKIE};
+use reqwest::{
+    Url,
+    header::{COOKIE, HeaderMap},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs;
@@ -63,6 +66,7 @@ pub struct AlbumDownloadSummary {
 pub(super) struct AlbumDownloadFile {
     pub(super) url: String,
     pub(super) path: PathBuf,
+    pub(super) headers: HeaderMap,
 }
 
 /// AlbumDownloadPlan 保存相册下载目录和文件列表。
@@ -165,16 +169,49 @@ pub(super) async fn download_album_with_progress(
     input_url: &str,
     progress: Option<IbbDownloadProgressCallback>,
 ) -> Result<IbbSpiderReport> {
+    download_album_with_session(client, base_path, file_name_mode, input_url, None, progress).await
+}
+
+/// 使用登录态执行相册 JSON 抓取、信息解析和文件下载。
+pub(super) async fn download_authenticated_album_with_progress(
+    client: Arc<LlphaClient>,
+    base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
+    session: &IbbLoginSession,
+    input_url: &str,
+    progress: Option<IbbDownloadProgressCallback>,
+) -> Result<IbbSpiderReport> {
+    download_album_with_session(
+        client,
+        base_path,
+        file_name_mode,
+        input_url,
+        Some(session),
+        progress,
+    )
+    .await
+}
+
+/// 执行可选认证的相册下载流程。
+async fn download_album_with_session(
+    client: Arc<LlphaClient>,
+    base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
+    input_url: &str,
+    session: Option<&IbbLoginSession>,
+    progress: Option<IbbDownloadProgressCallback>,
+) -> Result<IbbSpiderReport> {
     let album = IbbAlbumUrl::parse(input_url)?;
     info!(url = %album.normalized_url, "开始执行 ImgBB 相册任务");
 
-    let (parsed_album, album_json) = fetch_album_detail_and_json(&client, &album, None).await?;
+    let (parsed_album, album_json) = fetch_album_detail_and_json(&client, &album, session).await?;
     let download_summary = download_album_contents(
         client,
         &base_path,
         &album_json,
         &file_name_mode,
         &album.normalized_url,
+        session,
         progress,
     )
     .await?;
@@ -213,8 +250,53 @@ pub(super) async fn download_album_images_with_progress(
     image_ids: &[String],
     progress: Option<IbbDownloadProgressCallback>,
 ) -> Result<IbbSpiderReport> {
+    download_album_images_with_session(
+        client,
+        base_path,
+        file_name_mode,
+        detail,
+        image_ids,
+        None,
+        progress,
+    )
+    .await
+}
+
+/// 使用登录态下载已解析相册中的指定图片。
+pub(super) async fn download_authenticated_album_images_with_progress(
+    client: Arc<LlphaClient>,
+    base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
+    session: &IbbLoginSession,
+    detail: &IbbAlbumDetail,
+    image_ids: &[String],
+    progress: Option<IbbDownloadProgressCallback>,
+) -> Result<IbbSpiderReport> {
+    download_album_images_with_session(
+        client,
+        base_path,
+        file_name_mode,
+        detail,
+        image_ids,
+        Some(session),
+        progress,
+    )
+    .await
+}
+
+/// 执行可选认证的选中图片下载流程。
+async fn download_album_images_with_session(
+    client: Arc<LlphaClient>,
+    base_path: PathBuf,
+    file_name_mode: AlbumFileNameMode,
+    detail: &IbbAlbumDetail,
+    image_ids: &[String],
+    session: Option<&IbbLoginSession>,
+    progress: Option<IbbDownloadProgressCallback>,
+) -> Result<IbbSpiderReport> {
     let album = IbbAlbumUrl::parse(&detail.url)?;
-    let plan = build_selected_download_plan(&base_path, detail, image_ids, &file_name_mode)?;
+    let plan =
+        build_selected_download_plan(&base_path, detail, image_ids, &file_name_mode, session)?;
     let download_summary = download_album_plan(
         client,
         plan,
@@ -467,9 +549,10 @@ async fn download_album_contents(
     album_json: &Value,
     file_name_mode: &AlbumFileNameMode,
     album_url: &str,
+    session: Option<&IbbLoginSession>,
     progress: Option<IbbDownloadProgressCallback>,
 ) -> Result<AlbumDownloadSummary> {
-    let plan = build_download_plan(base_path, album_json, file_name_mode)?;
+    let plan = build_download_plan(base_path, album_json, file_name_mode, album_url, session)?;
     let album_title = required_json_string(album_json, "/album/name")?.to_string();
 
     download_album_plan(client, plan, album_url.to_string(), album_title, progress).await
@@ -516,8 +599,9 @@ async fn download_album_plan(
             async move {
                 let url = file.url;
                 let path = file.path;
+                let request = FetchRequest::get(url.clone()).with_headers(file.headers);
                 info!(url = %url, path = %path.display(), "开始下载相册文件");
-                let saved = client.download_file(url, &path).await?;
+                let saved = client.download_request_to_file(request, &path).await?;
                 let finished_files = finished_files.fetch_add(1, Ordering::SeqCst) + 1;
                 emit_album_download_progress(
                     &progress,
@@ -558,6 +642,7 @@ fn build_selected_download_plan(
     detail: &IbbAlbumDetail,
     image_ids: &[String],
     file_name_mode: &AlbumFileNameMode,
+    session: Option<&IbbLoginSession>,
 ) -> Result<AlbumDownloadPlan> {
     ensure!(!image_ids.is_empty(), "请选择要下载的图片");
 
@@ -569,6 +654,7 @@ fn build_selected_download_plan(
     let mut generator =
         AlbumFileNameGenerator::new(directory.clone(), &detail.title, file_name_mode.clone())?;
     let mut files = Vec::new();
+    let headers = image_headers_for_album(&detail.url, session)?;
 
     for image in detail
         .images
@@ -581,6 +667,7 @@ fn build_selected_download_plan(
         files.push(AlbumDownloadFile {
             url: image.image_url.clone(),
             path,
+            headers: headers.clone(),
         });
     }
 
@@ -594,6 +681,8 @@ fn build_download_plan(
     base_path: &Path,
     album_json: &Value,
     file_name_mode: &AlbumFileNameMode,
+    album_url: &str,
+    session: Option<&IbbLoginSession>,
 ) -> Result<AlbumDownloadPlan> {
     let album_name = required_json_string(album_json, "/album/name")?;
     let directory_name = sanitize_path_segment(album_name);
@@ -604,6 +693,7 @@ fn build_download_plan(
     let mut generator =
         AlbumFileNameGenerator::new(directory.clone(), album_name, file_name_mode.clone())?;
     let mut files = Vec::with_capacity(contents.len());
+    let headers = image_headers_for_album(album_url, session)?;
 
     for (index, item) in contents.iter().enumerate() {
         let filename = required_json_item_string(item, "contents", index, "filename")?;
@@ -615,10 +705,24 @@ fn build_download_plan(
         files.push(AlbumDownloadFile {
             url: url.to_string(),
             path,
+            headers: headers.clone(),
         });
     }
 
     Ok(AlbumDownloadPlan { directory, files })
+}
+
+/// 构造相册图片下载请求头，登录态存在时携带 Cookie。
+fn image_headers_for_album(
+    album_url: &str,
+    session: Option<&IbbLoginSession>,
+) -> Result<HeaderMap> {
+    let mut headers = image_download_headers(album_url)?;
+    if let Some(session) = session {
+        insert_header(&mut headers, COOKIE, &session.cookie_header)?;
+    }
+
+    Ok(headers)
 }
 
 /// 汇总并检查所有下载任务结果。
@@ -704,6 +808,8 @@ mod tests {
             &PathBuf::from("."),
             &sample_album_json(),
             &AlbumFileNameMode::default(),
+            "https://ibb.co/album/ABC123/",
+            None,
         )
         .unwrap();
 
@@ -725,6 +831,8 @@ mod tests {
             &PathBuf::from("downloads"),
             &sample_album_json(),
             &AlbumFileNameMode::default(),
+            "https://ibb.co/album/ABC123/",
+            None,
         )
         .unwrap();
 
@@ -747,6 +855,8 @@ mod tests {
             &PathBuf::from("downloads"),
             &sample_album_json(),
             &AlbumFileNameMode::CountPattern("{album}_{count}_{name}".to_string()),
+            "https://ibb.co/album/ABC123/",
+            None,
         )
         .unwrap();
 
@@ -794,6 +904,7 @@ mod tests {
             &detail,
             &[detail.images[1].id.clone()],
             &AlbumFileNameMode::CountPattern("{count}_{name}".to_string()),
+            None,
         )
         .unwrap();
 

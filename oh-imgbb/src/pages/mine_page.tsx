@@ -1,5 +1,6 @@
-import { FolderAddOutlined, LoginOutlined, ReloadOutlined } from "@ant-design/icons";
+import { ExportOutlined, FolderAddOutlined, LoginOutlined, ReloadOutlined } from "@ant-design/icons";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { App, Button, Empty, Form, Input, Modal, Radio, Space, Tabs, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
@@ -7,6 +8,8 @@ import {
   createImgbbAlbum,
   deleteImgbbAlbum,
   deleteImgbbImage,
+  downloadAlbum,
+  downloadAlbumImages,
   getImgbbLoginStatus,
   getSettings,
   loginImgbb,
@@ -179,7 +182,7 @@ export function MinePage() {
         title: response.data.title,
         url: response.data.url,
         album: response.data,
-        selectedImageIds: response.data.images.map((image) => image.id),
+        selectedImageIds: [],
         searchText: "",
         currentPage: 1,
         loading: false,
@@ -265,6 +268,87 @@ export function MinePage() {
     });
   }
 
+  // handleDownloadSelectedImages 下载管理相册中选中的图片。
+  async function handleDownloadSelectedImages(tab: ManagedAlbumTab) {
+    if (!tab.album || tab.selectedImageIds.length === 0) {
+      message.warning("请选择要下载的图片");
+      return;
+    }
+    try {
+      await downloadAlbumImages(tab.album, tab.selectedImageIds);
+      message.success("已加入下载任务");
+    } catch (error) {
+      message.error(String(error));
+    }
+  }
+
+  // handleDownloadAlbum 下载当前管理相册的全部图片。
+  async function handleDownloadAlbum(tab: ManagedAlbumTab) {
+    if (!tab.album) {
+      return;
+    }
+    try {
+      await downloadAlbum(tab.album.url);
+      message.success("已加入下载任务");
+    } catch (error) {
+      message.error(String(error));
+    }
+  }
+
+  // confirmDeleteSelectedImages 弹窗确认后删除选中图片。
+  function confirmDeleteSelectedImages(tab: ManagedAlbumTab) {
+    if (!tab.album || tab.selectedImageIds.length === 0) {
+      message.warning("请选择要删除的图片");
+      return;
+    }
+    modal.confirm({
+      title: "删除选中图片",
+      content: `确认删除选中的 ${tab.selectedImageIds.length} 张图片？`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        const imageIds = [...tab.selectedImageIds];
+        updateAlbumTab(tab.key, (current) => ({
+          deletingImageIds: Array.from(new Set([...current.deletingImageIds, ...imageIds])),
+        }));
+        try {
+          for (const imageId of imageIds) {
+            await deleteImgbbImage(imageId);
+          }
+          updateAlbumTab(tab.key, (current) => ({
+            album: current.album
+              ? {
+                  ...current.album,
+                  images: current.album.images.filter((image) => !imageIds.includes(image.id)),
+                }
+              : current.album,
+            selectedImageIds: current.selectedImageIds.filter((id) => !imageIds.includes(id)),
+          }));
+          message.success(`已删除 ${imageIds.length} 张图片`);
+        } catch (error) {
+          message.error(String(error));
+        } finally {
+          updateAlbumTab(tab.key, (current) => ({
+            deletingImageIds: current.deletingImageIds.filter((id) => !imageIds.includes(id)),
+          }));
+        }
+      },
+    });
+  }
+
+  // openInBrowser 使用系统浏览器打开外部地址。
+  async function openInBrowser(url?: string) {
+    if (!url) {
+      return;
+    }
+    try {
+      await openUrl(url);
+    } catch (error) {
+      message.error(String(error));
+    }
+  }
+
   // chooseUploadFiles 打开文件选择器并上传到当前相册标签。
   async function chooseUploadFiles(tabKey: string) {
     const selected = await open({
@@ -293,7 +377,7 @@ export function MinePage() {
         title: response.data.title,
         url: response.data.url,
         album: response.data,
-        selectedImageIds: response.data.images.map((image) => image.id),
+        selectedImageIds: [],
         loading: false,
       });
       message.success(`已上传 ${paths.length} 张图片`);
@@ -380,6 +464,10 @@ export function MinePage() {
         onRefreshAlbum: (item) => openManagedAlbum(item, true),
         onChooseUploadFiles: chooseUploadFiles,
         onDeleteImage: confirmDeleteImage,
+        onDownloadSelectedImages: handleDownloadSelectedImages,
+        onDownloadAlbum: handleDownloadAlbum,
+        onDeleteSelectedImages: confirmDeleteSelectedImages,
+        onOpenInBrowser: openInBrowser,
       }),
     })),
   ];
@@ -464,6 +552,13 @@ export function MinePage() {
             <Button icon={<ReloadOutlined />} loading={profileLoading} onClick={() => loadProfile(true)}>
               刷新
             </Button>
+            <Button
+              icon={<ExportOutlined />}
+              disabled={!loginStatus.profile_url}
+              onClick={() => openInBrowser(loginStatus.profile_url)}
+            >
+              在浏览器中打开
+            </Button>
             <Button type="primary" icon={<FolderAddOutlined />} onClick={() => setCreateOpen(true)}>
               新增相册
             </Button>
@@ -479,6 +574,7 @@ export function MinePage() {
           onPageChange: setProfilePage,
           onOpenAlbum: openManagedAlbum,
           onDeleteAlbum: confirmDeleteAlbum,
+          onOpenInBrowser: openInBrowser,
         })}
       </Space>
     );

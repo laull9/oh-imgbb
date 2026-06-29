@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use llpha::{image_download_headers, insert_header, FetchRequest};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -30,13 +31,15 @@ fn command_result<T>(result: Result<T>) -> Result<T, String> {
 pub async fn download_detail_image(
     state: State<'_, AppState>,
     url: String,
+    referer: Option<String>,
 ) -> Result<DetailImageResponse, String> {
     command_result(
         async {
             let path = build_detail_image_path(&state.detail_image_dir, &url)?;
+            let request = build_detail_image_request(&state, &url, referer.as_deref()).await?;
             state
                 .thumbnail_client
-                .download_file(url, &path)
+                .download_request_to_file(request, &path)
                 .await
                 .context("详情图下载失败")?;
 
@@ -46,6 +49,20 @@ pub async fn download_detail_image(
         }
         .await,
     )
+}
+
+/// 构造详情图下载请求，登录态存在时携带 Cookie。
+async fn build_detail_image_request(
+    state: &AppState,
+    url: &str,
+    referer: Option<&str>,
+) -> Result<FetchRequest> {
+    let mut headers = image_download_headers(referer.unwrap_or("https://ibb.co/"))?;
+    if let Some(session) = state.login_session.lock().await.clone() {
+        insert_header(&mut headers, "cookie".parse()?, &session.cookie_header)?;
+    }
+
+    Ok(FetchRequest::get(url).with_headers(headers))
 }
 
 /// 删除详情图临时文件，失败时保持幂等。

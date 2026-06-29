@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// USER_AGENTS_DATA 保存从外部库移植的 User-Agent 数据。
-const USER_AGENTS_DATA: &str = include_str!("../assets/user_agents.tsv");
+const USER_AGENTS_DATA: &str = include_str!("../../assets/user_agents.tsv");
 
 /// USER_AGENTS 保存按需解析后的 User-Agent 索引。
 static USER_AGENTS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();

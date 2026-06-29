@@ -1,15 +1,21 @@
 //! websearch 命令负责搜索公开 ImgBB 相册。
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use imgbb::ibb_spider::IbbSpiderManager;
 use llpha::{
     AggregateSearch, BingSearch, DuckDuckGoSearch, SearchEngine, SearchPing, SearchResult,
     SearxNgSearch,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::Semaphore;
+use tokio::time::sleep;
+
+/// SEARXNG_QUERY_DELAY 表示 SearxNG 连续查询之间的最小间隔。
+const SEARXNG_QUERY_DELAY: Duration = Duration::from_millis(350);
 
 /// SearchAlbumsDetail 保存网络搜索提取到的 ImgBB 相册列表。
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -129,6 +135,8 @@ async fn search_imgbb_album_candidates(
     let mut all_results = Vec::new();
     let mut errors = Vec::new();
     let mut handles = Vec::new();
+    let engines = build_imgbb_search_engines()?;
+    let searxng_limiter = Arc::new(Semaphore::new(1));
 
     for result in build_direct_album_results(raw_query) {
         if seen_result_urls.insert(result.url.clone()) {
@@ -137,10 +145,13 @@ async fn search_imgbb_album_candidates(
     }
 
     for search_query in search_queries {
-        for (engine_name, engine) in build_imgbb_search_engines()? {
+        for (engine_name, engine) in &engines {
             let search_query = search_query.clone();
+            let engine = engine.clone();
+            let limiter = (*engine_name == "SearxNG").then(|| searxng_limiter.clone());
+            let engine_name = *engine_name;
             handles.push(tokio::spawn(async move {
-                search_imgbb_album_query(engine_name, engine, search_query).await
+                search_imgbb_album_query(engine_name, engine, search_query, limiter).await
             }));
         }
     }
@@ -174,9 +185,24 @@ async fn search_imgbb_album_candidates(
 /// 执行单个 ImgBB 相册搜索词。
 async fn search_imgbb_album_query(
     engine_name: &'static str,
-    engine: Box<dyn SearchEngine>,
+    engine: Arc<dyn SearchEngine>,
     search_query: String,
+    limiter: Option<Arc<Semaphore>>,
 ) -> Result<AlbumSearchTaskOutput> {
+    let should_delay = limiter.is_some();
+    let _permit = match limiter {
+        Some(limiter) => Some(
+            limiter
+                .acquire_owned()
+                .await
+                .context("获取 SearxNG 搜索限流额度失败")?,
+        ),
+        None => None,
+    };
+    if should_delay {
+        sleep(SEARXNG_QUERY_DELAY).await;
+    }
+
     let output = match engine.search(&search_query).await {
         Ok(response) => AlbumSearchTaskOutput {
             engine_name,
@@ -208,31 +234,32 @@ fn build_direct_album_results(raw_query: &str) -> Vec<SearchResult> {
 }
 
 /// 构建 ImgBB 搜索使用的引擎列表。
-fn build_imgbb_search_engines() -> Result<Vec<(&'static str, Box<dyn SearchEngine>)>> {
+fn build_imgbb_search_engines() -> Result<Vec<(&'static str, Arc<dyn SearchEngine>)>> {
     let timeout = Duration::from_secs(8);
 
     Ok(vec![
         (
-            "DuckDuckGo",
-            Box::new(
-                DuckDuckGoSearch::builder()
-                    .limit(30)
-                    .timeout(timeout)
-                    .build()?,
-            ),
-        ),
-        (
-            "Bing",
-            Box::new(BingSearch::builder().limit(30).timeout(timeout).build()?),
-        ),
-        (
             "SearxNG",
-            Box::new(
+            Arc::new(
                 SearxNgSearch::builder()
                     .limit(30)
                     .timeout(timeout)
                     .build()?,
-            ),
+            ) as Arc<dyn SearchEngine>,
+        ),
+        (
+            "DuckDuckGo",
+            Arc::new(
+                DuckDuckGoSearch::builder()
+                    .limit(30)
+                    .timeout(timeout)
+                    .build()?,
+            ) as Arc<dyn SearchEngine>,
+        ),
+        (
+            "Bing",
+            Arc::new(BingSearch::builder().limit(30).timeout(timeout).build()?)
+                as Arc<dyn SearchEngine>,
         ),
     ])
 }

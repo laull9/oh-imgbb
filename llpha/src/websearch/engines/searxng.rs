@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use reqwest::{Url, header::ACCEPT};
 use serde::Deserialize;
+use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 use crate::downloader::{
@@ -109,6 +110,7 @@ impl SearxNgSearchBuilder {
         Ok(SearxNgSearch {
             config: self.builder.build()?,
             client,
+            preselected_base_urls: Arc::new(Mutex::new(None)),
         })
     }
 }
@@ -118,6 +120,7 @@ impl SearxNgSearchBuilder {
 pub struct SearxNgSearch {
     config: SearchConfig,
     client: Arc<LlphaClient>,
+    preselected_base_urls: Arc<Mutex<Option<Vec<String>>>>,
 }
 
 impl SearxNgSearch {
@@ -131,10 +134,15 @@ impl SearxNgSearch {
         SearxNgSearchBuilder::new()
     }
 
-    /// 快速预选单个搜索镜像。
+    /// 快速预选多个搜索镜像。
     async fn preselect_base_urls(&self) -> Vec<String> {
         if self.config.base_urls.len() <= 1 {
             return self.config.base_urls.clone();
+        }
+
+        let mut cached_base_urls = self.preselected_base_urls.lock().await;
+        if let Some(base_urls) = cached_base_urls.as_ref() {
+            return base_urls.clone();
         }
 
         let pings = self
@@ -143,16 +151,11 @@ impl SearxNgSearch {
                 Some(DEFAULT_SEARXNG_PRESELECT_GOAL),
             )
             .await;
-        if let Some(ping) = pings
-            .iter()
-            .filter(|ping| ping.available)
-            .map(|ping| ping.base_url.clone())
-            .next()
-        {
-            return vec![ping];
-        }
+        let base_urls = select_available_base_urls(&pings, DEFAULT_SEARXNG_PRESELECT_GOAL)
+            .unwrap_or_else(|| vec![self.config.base_urls[0].clone()]);
+        *cached_base_urls = Some(base_urls.clone());
 
-        vec![self.config.base_urls[0].clone()]
+        base_urls
     }
 
     /// 并发探测候选镜像并按可用性和延迟排序。
@@ -483,6 +486,18 @@ fn sort_ping_results(mut pings: Vec<(usize, SearchPing)>) -> Vec<SearchPing> {
     pings.into_iter().map(|(_, ping)| ping).collect()
 }
 
+/// 从 ping 结果中选出可用镜像地址。
+fn select_available_base_urls(pings: &[SearchPing], limit: usize) -> Option<Vec<String>> {
+    let base_urls = pings
+        .iter()
+        .filter(|ping| ping.available)
+        .map(|ping| ping.base_url.clone())
+        .take(limit.max(1))
+        .collect::<Vec<_>>();
+
+    (!base_urls.is_empty()).then_some(base_urls)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +564,47 @@ mod tests {
                 "https://third.example/search",
                 "https://second.example/search",
                 "https://first.example/search",
+            ]
+        );
+    }
+
+    /// 验证预选会保留多个可用镜像作为搜索回退。
+    #[test]
+    fn searxng_preselect_keeps_multiple_available_mirrors() {
+        let pings = vec![
+            SearchPing::single(
+                SearchEngineKind::SearxNg,
+                true,
+                "https://first.example/search".to_string(),
+                Some(200),
+                10,
+                None,
+            ),
+            SearchPing::single(
+                SearchEngineKind::SearxNg,
+                true,
+                "https://second.example/search".to_string(),
+                Some(200),
+                20,
+                None,
+            ),
+            SearchPing::single(
+                SearchEngineKind::SearxNg,
+                false,
+                "https://limited.example/search".to_string(),
+                Some(429),
+                5,
+                Some("limited".to_string()),
+            ),
+        ];
+
+        let base_urls = select_available_base_urls(&pings, 3).unwrap();
+
+        assert_eq!(
+            base_urls,
+            vec![
+                "https://first.example/search".to_string(),
+                "https://second.example/search".to_string(),
             ]
         );
     }
@@ -761,9 +817,9 @@ mod tests {
         assert!(!is_internal_url(&base_url, &response.results[0].url));
     }
 
-    /// 验证 SearxNG 搜索遇到 429 不会继续搜索后续镜像。
+    /// 验证没有可用预选回退时会保留 SearxNG 429 错误。
     #[tokio::test]
-    async fn searxng_search_does_not_fallback_after_429_status() {
+    async fn searxng_search_reports_429_without_available_preselected_fallback() {
         let rate_limited_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let working_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let rate_limited_url = format!(

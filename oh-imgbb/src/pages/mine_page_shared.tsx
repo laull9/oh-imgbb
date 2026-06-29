@@ -1,12 +1,14 @@
 import {
   DeleteOutlined,
+  DownloadOutlined,
+  ExportOutlined,
   FolderOpenOutlined,
   LoginOutlined,
   LogoutOutlined,
   ReloadOutlined,
   UploadOutlined,
 } from "@ant-design/icons";
-import { Button, Empty, Form, Image, Input, List, Pagination, Space, Spin, Typography } from "antd";
+import { Button, Checkbox, Empty, Form, Image, Input, List, Pagination, Space, Spin, Typography } from "antd";
 import type { FormInstance } from "antd";
 import type {
   AlbumDetail,
@@ -62,6 +64,7 @@ export interface MineAlbumListProps {
   onPageChange: (page: number) => void;
   onOpenAlbum: (item: ProfileAlbum) => void;
   onDeleteAlbum: (item: ProfileAlbum) => void;
+  onOpenInBrowser: (url: string) => void;
 }
 
 export interface ManagedAlbumRenderProps {
@@ -71,6 +74,10 @@ export interface ManagedAlbumRenderProps {
   onRefreshAlbum: (item: ProfileAlbum) => void;
   onChooseUploadFiles: (tabKey: string) => void;
   onDeleteImage: (tabKey: string, image: AlbumImage) => void;
+  onDownloadSelectedImages: (tab: ManagedAlbumTab) => void;
+  onDownloadAlbum: (tab: ManagedAlbumTab) => void;
+  onDeleteSelectedImages: (tab: ManagedAlbumTab) => void;
+  onOpenInBrowser: (url: string) => void;
 }
 
 export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp", "avif", "bmp", "svg"];
@@ -135,6 +142,7 @@ export function renderMineAlbumList({
   onPageChange,
   onOpenAlbum,
   onDeleteAlbum,
+  onOpenInBrowser,
 }: MineAlbumListProps) {
   return (
     <>
@@ -153,6 +161,14 @@ export function renderMineAlbumList({
                 onClick={() => onOpenAlbum(item)}
               >
                 打开
+              </Button>,
+              <Button
+                key="browser"
+                type="text"
+                icon={<ExportOutlined />}
+                onClick={() => onOpenInBrowser(item.url)}
+              >
+                浏览器
               </Button>,
               <Button
                 key="delete"
@@ -204,6 +220,10 @@ export function renderManagedAlbumTab({
   onRefreshAlbum,
   onChooseUploadFiles,
   onDeleteImage,
+  onDownloadSelectedImages,
+  onDownloadAlbum,
+  onDeleteSelectedImages,
+  onOpenInBrowser,
 }: ManagedAlbumRenderProps) {
   if (tab.loading) {
     return (
@@ -220,9 +240,13 @@ export function renderManagedAlbumTab({
     );
   }
   const filteredImages = filterAlbumImages(tab.album.images, tab.searchText);
+  const albumPage = clampPage(tab.currentPage, filteredImages.length, displaySettings.album_page_size);
   const visibleImages = displaySettings.pagination_enabled
-    ? paginateList(filteredImages, tab.currentPage, displaySettings.album_page_size)
+    ? paginateList(filteredImages, albumPage, displaySettings.album_page_size)
     : filteredImages;
+  const filteredImageIds = filteredImages.map((image) => image.id);
+  const allImageSelected =
+    filteredImageIds.length > 0 && filteredImageIds.every((id) => tab.selectedImageIds.includes(id));
 
   return (
     <Space direction="vertical" size={12} className={parseStyles.pageStack}>
@@ -230,7 +254,7 @@ export function renderManagedAlbumTab({
         <div className={parseStyles.resultTitle}>
           <Typography.Title level={4}>{tab.album.title}</Typography.Title>
           <Typography.Text type="secondary">
-            {filteredImages.length}/{tab.album.images.length} · 可拖动图片到窗口上传
+            {filteredImages.length}/{tab.album.images.length} · 已选 {tab.selectedImageIds.length} · 可拖动图片到窗口上传
           </Typography.Text>
         </div>
         <Space className={parseStyles.resultActions}>
@@ -241,11 +265,43 @@ export function renderManagedAlbumTab({
             placeholder="搜索图片"
             className={parseStyles.resultSearch}
           />
+          <Checkbox
+            checked={allImageSelected}
+            onChange={(event) =>
+              onUpdateTab(tab.key, {
+                selectedImageIds: event.target.checked
+                  ? mergeSelection(tab.selectedImageIds, filteredImageIds)
+                  : removeSelection(tab.selectedImageIds, filteredImageIds),
+              })
+            }
+          >
+            全选
+          </Checkbox>
           <Button icon={<ReloadOutlined />} onClick={() => onRefreshAlbum(profileAlbumFromDetail(tab.album!))}>
             刷新
           </Button>
+          <Button icon={<ExportOutlined />} onClick={() => onOpenInBrowser(tab.album!.url)}>
+            在浏览器中打开
+          </Button>
           <Button
-            type="primary"
+            icon={<DownloadOutlined />}
+            disabled={tab.selectedImageIds.length === 0}
+            onClick={() => onDownloadSelectedImages(tab)}
+          >
+            下载选中
+          </Button>
+          <Button type="primary" icon={<DownloadOutlined />} onClick={() => onDownloadAlbum(tab)}>
+            下载全部
+          </Button>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={tab.selectedImageIds.length === 0}
+            onClick={() => onDeleteSelectedImages(tab)}
+          >
+            删除选中
+          </Button>
+          <Button
             icon={<UploadOutlined />}
             loading={tab.uploadLoading}
             onClick={() => onChooseUploadFiles(tab.key)}
@@ -259,6 +315,7 @@ export function renderManagedAlbumTab({
           images={visibleImages}
           selectedIds={tab.selectedImageIds}
           onSelectedIdsChange={(ids) => onUpdateTab(tab.key, { selectedImageIds: ids })}
+          detailReferer={tab.album.url}
           onDeleteImage={(image) => onDeleteImage(tab.key, image)}
           deletingImageIds={tab.deletingImageIds}
         />
@@ -266,7 +323,7 @@ export function renderManagedAlbumTab({
       {displaySettings.pagination_enabled && filteredImages.length > displaySettings.album_page_size && (
         <Pagination
           align="end"
-          current={tab.currentPage}
+          current={albumPage}
           pageSize={displaySettings.album_page_size}
           total={filteredImages.length}
           showSizeChanger={false}
@@ -310,10 +367,30 @@ export function filterAlbumImages(images: AlbumImage[], searchText: string) {
 
 // paginateList 截取当前分页数据。
 export function paginateList<T>(items: T[], currentPage: number, pageSize: number) {
-  const safePage = Math.max(1, currentPage);
   const safePageSize = Math.max(1, pageSize);
+  const safePage = clampPage(currentPage, items.length, safePageSize);
   const start = (safePage - 1) * safePageSize;
   return items.slice(start, start + safePageSize);
+}
+
+// clampPage 将页码限制到合法范围。
+export function clampPage(currentPage: number, total: number, pageSize: number) {
+  const safePageSize = Math.max(1, pageSize);
+  const maxPage = Math.max(1, Math.ceil(total / safePageSize));
+
+  return Math.min(Math.max(1, currentPage), maxPage);
+}
+
+// mergeSelection 合并选择项并去重。
+export function mergeSelection(current: string[], next: string[]) {
+  return Array.from(new Set([...current, ...next]));
+}
+
+// removeSelection 从选择项中移除指定项。
+export function removeSelection(current: string[], removed: string[]) {
+  const removedSet = new Set(removed);
+
+  return current.filter((item) => !removedSet.has(item));
 }
 
 // extractAlbumId 从 ImgBB 相册地址提取相册 ID。
