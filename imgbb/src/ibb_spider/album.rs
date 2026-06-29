@@ -14,6 +14,7 @@ use tokio::fs;
 use tracing::info;
 
 use super::login::IbbLoginSession;
+use super::manage_response::find_image_id;
 use super::name_generator::{AlbumFileNameGenerator, AlbumFileNameMode};
 use super::utils::{extract_auth_token, normalize_url_input, sanitize_path_segment};
 
@@ -392,12 +393,15 @@ fn parse_album_images(album_json: &Value) -> Result<Vec<IbbAlbumImage>> {
     for (index, item) in contents.iter().enumerate() {
         let filename = required_json_item_string(item, "contents", index, "filename")?;
         let image_url = required_json_item_string(item, "contents", index, "url")?;
+        let image_id = find_image_id(item)
+            .or_else(|| image_id_from_url(image_url))
+            .unwrap_or_else(|| image_url.to_string());
         let thumbnail_url = optional_image_variant_url(item, "thumb")
             .or_else(|| optional_image_variant_url(item, "display_url"))
             .or_else(|| optional_image_variant_url(item, "medium"));
 
         images.push(IbbAlbumImage {
-            id: image_url.to_string(),
+            id: image_id,
             filename: filename.to_string(),
             image_url: image_url.to_string(),
             thumbnail_url,
@@ -407,6 +411,19 @@ fn parse_album_images(album_json: &Value) -> Result<Vec<IbbAlbumImage>> {
     }
 
     Ok(images)
+}
+
+/// 从图片直链中提取 ImgBB encoded ID。
+fn image_id_from_url(input: &str) -> Option<String> {
+    let url = Url::parse(input).ok()?;
+    let host = url.host_str()?;
+    if !host.ends_with("ibb.co") {
+        return None;
+    }
+
+    url.path_segments()?
+        .find(|segment| !segment.is_empty() && *segment != "album")
+        .map(str::to_string)
 }
 
 /// 从图片变体字段中读取 URL。
@@ -753,6 +770,8 @@ mod tests {
         let images = parse_album_images(&sample_album_json()).unwrap();
 
         assert_eq!(images.len(), 2);
+        assert_eq!(images[0].id, "IMG123");
+        assert_eq!(images[1].id, "IMG456");
         assert_eq!(images[0].filename, "a:b.jpg");
         assert_eq!(images[0].image_url, "https://i.ibb.co/a.jpg");
         assert_eq!(
@@ -826,6 +845,7 @@ mod tests {
             },
             "contents": [
                 {
+                    "id_encoded": "IMG123",
                     "filename": "a:b.jpg",
                     "url": "https://i.ibb.co/a.jpg",
                     "thumb": {
@@ -833,6 +853,9 @@ mod tests {
                     }
                 },
                 {
+                    "image": {
+                        "id_encoded": "IMG456"
+                    },
                     "filename": "a:b.jpg",
                     "url": "https://i.ibb.co/a-copy.jpg",
                     "medium": {

@@ -15,8 +15,9 @@ import {
   parseProfile,
   uploadImgbbAlbumImage,
 } from "../api/tauri_client";
-import type { AlbumImage, AppSettings, LoginStatus, ProfileAlbum } from "../api/types";
+import type { AlbumImage, AppSettings, ProfileAlbum } from "../api/types";
 import parseStyles from "../css/parse_page.module.css";
+import { useAppStore } from "../tools/store";
 import {
   IMAGE_EXTENSIONS,
   type ManagedAlbumTab,
@@ -43,9 +44,10 @@ export function MinePage() {
   const { message, modal } = App.useApp();
   const [loginForm] = Form.useForm<LoginForm>();
   const [createForm] = Form.useForm<CreateAlbumForm>();
+  const loginStatus = useAppStore((state) => state.loginStatus);
+  const setAppState = useAppStore((state) => state.setState);
   const [activeTab, setActiveTab] = useState(LOGIN_TAB_KEY);
   const [settings, setSettings] = useState<AppSettings>();
-  const [loginStatus, setLoginStatus] = useState<LoginStatus>({ logged_in: false, verified: false });
   const [authLoading, setAuthLoading] = useState(false);
   const [logoutLoading, setLogoutLoading] = useState(false);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -102,7 +104,7 @@ export function MinePage() {
     try {
       const [nextSettings, status] = await Promise.all([getSettings(), getImgbbLoginStatus()]);
       setSettings(nextSettings);
-      setLoginStatus(status);
+      setAppState({ loginStatus: status });
       loginForm.setFieldsValue({
         login_subject: nextSettings.imgbb_login_subject,
         password: nextSettings.imgbb_password,
@@ -120,7 +122,7 @@ export function MinePage() {
     setAuthLoading(true);
     try {
       const status = await loginImgbb(values.login_subject, values.password);
-      setLoginStatus(status);
+      setAppState({ loginStatus: status });
       setActiveTab(ACCOUNT_TAB_KEY);
       message.success("ImgBB 登录成功");
     } catch (error) {
@@ -135,7 +137,7 @@ export function MinePage() {
     setLogoutLoading(true);
     try {
       const status = await logoutImgbb();
-      setLoginStatus(status);
+      setAppState({ loginStatus: status });
       setAlbums([]);
       setAlbumTabs([]);
       setActiveTab(LOGIN_TAB_KEY);

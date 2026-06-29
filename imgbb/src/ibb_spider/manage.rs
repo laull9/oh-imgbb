@@ -160,7 +160,8 @@ pub(super) async fn delete_image(
     session: &IbbLoginSession,
     image_id: &str,
 ) -> Result<IbbApiReport> {
-    ensure!(!image_id.trim().is_empty(), "图片 ID 不能为空");
+    let image_id = normalize_image_management_id(image_id);
+    ensure!(!image_id.is_empty(), "图片 ID 不能为空");
 
     post_profile_form(
         session,
@@ -170,7 +171,7 @@ pub(super) async fn delete_image(
             ("action".to_string(), "delete".to_string()),
             ("single".to_string(), "true".to_string()),
             ("delete".to_string(), "image".to_string()),
-            ("deleting[id]".to_string(), image_id.trim().to_string()),
+            ("deleting[id]".to_string(), image_id),
         ],
     )
     .await
@@ -249,7 +250,8 @@ pub(super) async fn edit_image(
     session: &IbbLoginSession,
     input: IbbEditImageInput,
 ) -> Result<IbbApiReport> {
-    ensure!(!input.image_id.trim().is_empty(), "图片 ID 不能为空");
+    let image_id = normalize_image_management_id(&input.image_id);
+    ensure!(!image_id.is_empty(), "图片 ID 不能为空");
     let mut fields = vec![
         ("auth_token".to_string(), session.profile.auth_token.clone()),
         ("pathname".to_string(), "/".to_string()),
@@ -257,7 +259,7 @@ pub(super) async fn edit_image(
         ("edit".to_string(), "image".to_string()),
         ("single".to_string(), "true".to_string()),
         ("owner".to_string(), session.profile.owner_id.clone()),
-        ("editing[id]".to_string(), input.image_id.trim().to_string()),
+        ("editing[id]".to_string(), image_id),
         (
             "editing[description]".to_string(),
             input.description.unwrap_or_default(),
@@ -276,6 +278,25 @@ pub(super) async fn edit_image(
     }
 
     post_profile_form(session, fields).await
+}
+
+/// 规整管理接口使用的图片 ID。
+fn normalize_image_management_id(input: &str) -> String {
+    let input = input.trim();
+    image_id_from_url(input).unwrap_or_else(|| input.to_string())
+}
+
+/// 从图片或查看页 URL 中提取 ImgBB encoded ID。
+fn image_id_from_url(input: &str) -> Option<String> {
+    let url = Url::parse(input).ok()?;
+    let host = url.host_str()?;
+    if !host.ends_with("ibb.co") {
+        return None;
+    }
+
+    url.path_segments()?
+        .find(|segment| !segment.is_empty() && *segment != "album")
+        .map(str::to_string)
 }
 
 /// 拉取相册页面并提取上传使用的 token。
@@ -518,5 +539,19 @@ mod tests {
             origin_from_url("https://demo.imgbb.com/albums?list=albums").unwrap(),
             "https://demo.imgbb.com"
         );
+    }
+
+    /// 验证图片管理 ID 可以兼容旧版图片直链。
+    #[test]
+    fn image_management_id_accepts_direct_image_url() {
+        assert_eq!(
+            normalize_image_management_id("https://i.ibb.co/ABC123/demo.jpg"),
+            "ABC123"
+        );
+        assert_eq!(
+            normalize_image_management_id("https://ibb.co/IMG456"),
+            "IMG456"
+        );
+        assert_eq!(normalize_image_management_id("IMG789"), "IMG789");
     }
 }

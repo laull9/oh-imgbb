@@ -123,13 +123,28 @@ pub(crate) async fn run_search<P>(provider: &P, query: &str) -> Result<SearchRes
 where
     P: SearchProvider,
 {
+    run_search_with_base_urls(provider, query, &provider.config().base_urls).await
+}
+
+/// 按指定源顺序执行通用搜索流程。
+pub(crate) async fn run_search_with_base_urls<P>(
+    provider: &P,
+    query: &str,
+    base_urls: &[String],
+) -> Result<SearchResponse>
+where
+    P: SearchProvider,
+{
     provider.config().validate()?;
+    if base_urls.is_empty() {
+        return Err(anyhow!("搜索 base_url 不能为空"));
+    }
 
     let mut results = Vec::new();
     let mut seen_urls = HashSet::new();
     let mut pages_fetched = 0;
     let mut next_url = None;
-    let mut active_base_url = provider.config().base_urls[0].clone();
+    let mut active_base_url = base_urls[0].clone();
 
     for page_index in 0..provider.config().max_pages {
         if results.len() >= provider.config().limit {
@@ -144,6 +159,7 @@ where
             offset,
             &active_base_url,
             next_url,
+            base_urls,
         )
         .await?;
         pages_fetched += 1;
@@ -188,6 +204,7 @@ async fn fetch_next_page<P>(
     offset: usize,
     active_base_url: &str,
     next_url: Option<String>,
+    base_urls: &[String],
 ) -> Result<PageFetch>
 where
     P: SearchProvider,
@@ -209,7 +226,7 @@ where
     }
 
     let mut last_error = None;
-    for base_url in &provider.config().base_urls {
+    for base_url in base_urls {
         let page_url = provider.page_url(base_url, query, page_index, offset)?;
         match fetch_page(provider, base_url, &page_url).await {
             Ok(page) => {

@@ -46,7 +46,7 @@ pub async fn search_imgbb_albums(query: String) -> Result<SearchAlbumsDetail, St
         async {
             let query = query.trim().to_string();
             let search_queries = build_imgbb_album_search_queries(&query);
-            let report = search_imgbb_album_candidates(&search_queries).await?;
+            let report = search_imgbb_album_candidates(&query, &search_queries).await?;
 
             Ok(SearchAlbumsDetail {
                 query,
@@ -75,14 +75,34 @@ fn build_imgbb_album_search_queries(query: &str) -> Vec<String> {
     let query = query.trim();
     let primary_query = build_imgbb_album_search_query(query);
     if query.is_empty() {
-        return vec![primary_query, "\"ibb.co/album/\"".to_string()];
+        return dedupe_search_queries(vec![
+            primary_query,
+            "\"ibb.co/album/\"".to_string(),
+            "ibb.co/album ImgBB".to_string(),
+        ]);
     }
 
-    vec![
+    let mut queries = vec![
         primary_query,
         format!("\"ibb.co/album/\" {query}"),
-        format!("site:ibb.co {query} album"),
-    ]
+        format!("site:ibb.co {query} ImgBB"),
+        format!("ibb.co/album {query}"),
+    ];
+    if query.chars().count() <= 2 {
+        queries.push("\"ibb.co/album/\"".to_string());
+        queries.push("ibb.co/album ImgBB".to_string());
+    }
+
+    dedupe_search_queries(queries)
+}
+
+/// 去重搜索词并保持原始顺序。
+fn dedupe_search_queries(queries: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    queries
+        .into_iter()
+        .filter(|query| seen.insert(query.clone()))
+        .collect()
 }
 
 /// AlbumSearchReport 保存 ImgBB 相册搜索诊断结果。
@@ -101,11 +121,20 @@ struct AlbumSearchTaskOutput {
 }
 
 /// 搜索 ImgBB 相册候选结果。
-async fn search_imgbb_album_candidates(search_queries: &[String]) -> Result<AlbumSearchReport> {
+async fn search_imgbb_album_candidates(
+    raw_query: &str,
+    search_queries: &[String],
+) -> Result<AlbumSearchReport> {
     let mut seen_result_urls = HashSet::new();
     let mut all_results = Vec::new();
     let mut errors = Vec::new();
     let mut handles = Vec::new();
+
+    for result in build_direct_album_results(raw_query) {
+        if seen_result_urls.insert(result.url.clone()) {
+            all_results.push(result);
+        }
+    }
 
     for search_query in search_queries {
         for (engine_name, engine) in build_imgbb_search_engines()? {
@@ -152,22 +181,30 @@ async fn search_imgbb_album_query(
         Ok(response) => AlbumSearchTaskOutput {
             engine_name,
             search_query,
-            results: response
-                .results
-                .into_iter()
-                .filter(search_result_contains_album_url)
-                .collect(),
+            results: response.results,
             error: None,
         },
         Err(err) => AlbumSearchTaskOutput {
             engine_name,
             search_query,
             results: Vec::new(),
-            error: Some(err.to_string()),
+            error: Some(format!("{err:#}")),
         },
     };
 
     Ok(output)
+}
+
+/// 从用户输入中直接提取相册地址作为搜索结果。
+fn build_direct_album_results(raw_query: &str) -> Vec<SearchResult> {
+    collect_album_urls_from_text(raw_query)
+        .into_iter()
+        .map(|url| SearchResult {
+            title: raw_query.trim().to_string(),
+            url,
+            snippet: String::new(),
+        })
+        .collect()
 }
 
 /// 构建 ImgBB 搜索使用的引擎列表。
@@ -200,12 +237,6 @@ fn build_imgbb_search_engines() -> Result<Vec<(&'static str, Box<dyn SearchEngin
     ])
 }
 
-/// 判断搜索结果是否包含 ImgBB 相册地址。
-fn search_result_contains_album_url(result: &SearchResult) -> bool {
-    !collect_album_urls_from_text(&result.url).is_empty()
-        || !collect_album_urls_from_text(&result.snippet).is_empty()
-}
-
 /// 从搜索结果中提取可识别的 ImgBB 相册列表。
 fn extract_profile_albums_from_search(
     results: &[SearchResult],
@@ -215,6 +246,7 @@ fn extract_profile_albums_from_search(
 
     for result in results {
         let mut candidates = collect_album_urls_from_text(&result.url);
+        candidates.extend(collect_album_urls_from_text(&result.title));
         candidates.extend(collect_album_urls_from_text(&result.snippet));
 
         for url in candidates {
@@ -238,7 +270,21 @@ fn extract_profile_albums_from_search(
 
 /// 从文本中收集可能的 ImgBB 相册 URL。
 fn collect_album_urls_from_text(text: &str) -> Vec<String> {
+    let mut seen_urls = HashSet::new();
     let mut urls = Vec::new();
+    for text in build_url_text_variants(text) {
+        collect_album_urls_from_plain_text(&text, &mut seen_urls, &mut urls);
+    }
+
+    urls
+}
+
+/// 从单个文本变体中收集 ImgBB 相册 URL。
+fn collect_album_urls_from_plain_text(
+    text: &str,
+    seen_urls: &mut HashSet<String>,
+    urls: &mut Vec<String>,
+) {
     let mut start_index = 0usize;
 
     while let Some(relative_index) = text[start_index..].find("ibb.co/album/") {
@@ -253,11 +299,66 @@ fn collect_album_urls_from_text(text: &str) -> Vec<String> {
             format!("https://{candidate}")
         };
 
-        urls.push(candidate);
+        if seen_urls.insert(candidate.clone()) {
+            urls.push(candidate);
+        }
         start_index = candidate_end;
     }
+}
 
-    urls
+/// 构造用于 URL 提取的文本变体。
+fn build_url_text_variants(text: &str) -> Vec<String> {
+    let unescaped = unescape_url_text(text);
+    let decoded = percent_decode_lossy(&unescaped);
+    dedupe_search_queries(vec![text.to_string(), unescaped, decoded])
+}
+
+/// 反转义搜索引擎结果中的常见 HTML 和 JS URL 片段。
+fn unescape_url_text(text: &str) -> String {
+    text.replace("\\/", "/")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#039;", "'")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+}
+
+/// 宽松解码百分号编码文本。
+fn percent_decode_lossy(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Some(value) = decode_hex_byte(bytes[index + 1], bytes[index + 2]) {
+                decoded.push(value);
+                index += 3;
+                continue;
+            }
+        }
+
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&decoded).to_string()
+}
+
+/// 解码两个十六进制字符。
+fn decode_hex_byte(high: u8, low: u8) -> Option<u8> {
+    Some(hex_value(high)? * 16 + hex_value(low)?)
+}
+
+/// 返回单个十六进制字符的数值。
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// 向前定位 URL 候选片段的起始位置。
@@ -281,7 +382,7 @@ fn find_url_candidate_start(text: &str, album_marker_index: usize) -> usize {
 fn find_url_candidate_end(text: &str, album_marker_index: usize) -> usize {
     text[album_marker_index..]
         .find(|value: char| {
-            value.is_whitespace() || matches!(value, '"' | '\'' | '<' | '>' | ')' | ']' | '}')
+            value.is_whitespace() || matches!(value, '"' | '\'' | '<' | '>' | ')' | ']' | '}' | '&')
         })
         .map(|index| album_marker_index + index)
         .unwrap_or(text.len())
@@ -314,6 +415,16 @@ mod tests {
         );
     }
 
+    /// 验证短关键词会增加宽搜索兜底词。
+    #[test]
+    fn search_queries_add_short_keyword_fallbacks() {
+        let queries = build_imgbb_album_search_queries("小");
+
+        assert!(queries.contains(&"site:ibb.co/album/ 小".to_string()));
+        assert!(queries.contains(&"\"ibb.co/album/\"".to_string()));
+        assert!(queries.contains(&"ibb.co/album ImgBB".to_string()));
+    }
+
     /// 验证搜索结果可以提取并规整相册地址。
     #[test]
     fn search_results_extract_album_urls() {
@@ -328,25 +439,60 @@ mod tests {
                 url: "https://example.com".to_string(),
                 snippet: "see https://ibb.co/album/ABC123/ and ibb.co/album/XYZ789".to_string(),
             },
+            SearchResult {
+                title: "title has ibb.co/album/TITLE1 - ImgBB".to_string(),
+                url: "https://example.com".to_string(),
+                snippet: String::new(),
+            },
         ];
 
         let albums = extract_profile_albums_from_search(&results);
 
-        assert_eq!(albums.len(), 2);
+        assert_eq!(albums.len(), 3);
         assert_eq!(albums[0].name, "Demo");
         assert_eq!(albums[0].url, "https://ibb.co/album/ABC123/");
         assert_eq!(albums[1].url, "https://ibb.co/album/XYZ789/");
+        assert_eq!(albums[2].url, "https://ibb.co/album/TITLE1/");
+    }
+
+    /// 验证编码或转义后的相册地址也能提取。
+    #[test]
+    fn album_url_collector_decodes_escaped_urls() {
+        let urls = collect_album_urls_from_text(
+            r#"redirect=https%3A%2F%2Fibb.co%2Falbum%2FENC123%2F&amp;u=https:\/\/ibb.co\/album\/JS456"#,
+        );
+
+        assert_eq!(
+            urls,
+            vec![
+                "https://ibb.co/album/JS456".to_string(),
+                "https://ibb.co/album/ENC123/".to_string(),
+            ]
+        );
+    }
+
+    /// 验证用户直接输入相册地址会作为候选结果。
+    #[test]
+    fn direct_album_input_builds_search_result() {
+        let results = build_direct_album_results("看看 https://ibb.co/album/ABC123/");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://ibb.co/album/ABC123/");
     }
 
     /// live 验证真实搜索可以提取 ImgBB 相册地址。
     #[tokio::test]
     #[ignore = "live 测试需要访问公开搜索引擎"]
     async fn live_search_imgbb_albums_extracts_results() {
-        let search_queries = build_imgbb_album_search_queries("album");
-        let report = search_imgbb_album_candidates(&search_queries)
+        let query =
+            std::env::var("IMGBB_LIVE_SEARCH_QUERY").unwrap_or_else(|_| "album".to_string());
+        let search_queries = build_imgbb_album_search_queries(&query);
+        let report = search_imgbb_album_candidates(&query, &search_queries)
             .await
             .expect("搜索 ImgBB 相册失败");
 
+        println!("查询词: {query}");
+        println!("搜索词: {}", search_queries.join(" | "));
         println!("候选结果数: {}", report.result_count);
         println!("提取相册数: {}", report.albums.len());
         for error in &report.errors {

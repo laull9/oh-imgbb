@@ -4,6 +4,7 @@ mod aggregate;
 mod bing;
 mod duckduckgo;
 mod searxng;
+mod searxng_mirrors;
 
 pub use aggregate::{AggregateSearch, AggregateSearchBuilder};
 pub use bing::{BingSearch, BingSearchBuilder, DEFAULT_BING_BASE_URL};

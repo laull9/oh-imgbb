@@ -1,37 +1,15 @@
-import { App as AntdApp, ConfigProvider } from "antd";
-import { theme } from "antd";
+import { App as AntdApp, ConfigProvider, theme } from "antd";
 import "antd/dist/reset.css";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { AppLayout } from "./components/app_layout";
-
-const COLOR_SCHEME_QUERY = "(prefers-color-scheme: dark)";
-
-// getSystemDarkMode 读取系统当前亮暗模式。
-function getSystemDarkMode() {
-  if (typeof window === "undefined" || !window.matchMedia) {
-    return false;
-  }
-
-  return window.matchMedia(COLOR_SCHEME_QUERY).matches;
-}
+import { useAppStore } from "./tools/store";
+import { useAppDarkMode } from "./hooks/useAppDarkMode";
 
 function App() {
-  const [darkMode, setDarkMode] = useState(getSystemDarkMode);
-
-  useEffect(() => {
-    const media = window.matchMedia(COLOR_SCHEME_QUERY);
-    const handleChange = (event: MediaQueryListEvent) => {
-      setDarkMode(event.matches);
-    };
-
-    setDarkMode(media.matches);
-    media.addEventListener("change", handleChange);
-
-    return () => {
-      media.removeEventListener("change", handleChange);
-    };
-  }, []);
-
+  // 初始化系统暗黑监听
+  useAppDarkMode();
+  const darkMode = useAppStore((s) => s.darkMode);
+  // 同步 DOM（给 CSS / tailwind / 自定义变量用）
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? "dark" : "light";
   }, [darkMode]);
@@ -39,7 +17,10 @@ function App() {
   return (
     <ConfigProvider
       theme={{
-        algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
+        algorithm: darkMode
+          ? theme.darkAlgorithm
+          : theme.defaultAlgorithm,
+
         token: {
           borderRadius: 6,
           colorPrimary: "#2563eb",

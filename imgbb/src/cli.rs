@@ -194,7 +194,7 @@ pub struct IbbImagesArgs {
     /// url 指定 ImgBB 相册地址。
     pub url: String,
 
-    /// image_id 指定要下载的图片 ID，可重复传入；通常等于解析结果中的 image_url。
+    /// image_id 指定要下载的图片 ID，可重复传入；通常使用解析结果中的 id。
     #[arg(long = "image-id", required = true)]
     pub image_ids: Vec<String>,
 

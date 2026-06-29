@@ -127,6 +127,47 @@ impl SearchPing {
             children,
         }
     }
+
+    /// 创建同一搜索引擎的多候选源 ping 汇总。
+    pub fn group(engine: SearchEngineKind, children: Vec<SearchPing>) -> Self {
+        let available = children.iter().any(|child| child.available);
+        let latency_ms = children
+            .iter()
+            .map(|child| child.latency_ms)
+            .max()
+            .unwrap_or(0);
+        let error = if available {
+            None
+        } else {
+            Some(
+                children
+                    .iter()
+                    .filter_map(|child| child.error.as_deref())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+            .filter(|value| !value.is_empty())
+        };
+
+        Self {
+            engine,
+            available,
+            base_url: children
+                .iter()
+                .find(|child| child.available)
+                .or_else(|| children.first())
+                .map(|child| child.base_url.clone())
+                .unwrap_or_default(),
+            status: children
+                .iter()
+                .find(|child| child.available)
+                .or_else(|| children.first())
+                .and_then(|child| child.status),
+            latency_ms,
+            error,
+            children,
+        }
+    }
 }
 
 /// SearchPage 表示单页搜索解析结果。
